@@ -1,0 +1,15 @@
+version: 1
+
+allowed_empty_folders:
+  - path: "00 Agent Inbox"
+    type: inbox
+    reason: Intentional staging area for files waiting for human or agent triage.
+  - path_glob: "*/A. PreSales"
+    type: stage
+    reason: Template stage folder may be created before artifacts arrive.
+  - path_glob: "*/B. Delivery"
+    type: stage
+    reason: Optional project stage folder may be empty until delivery begins.
+  - path_glob: "*/C. Post Sales"
+    type: stage
+    reason: Optional project stage folder may be empty until post-sales work begins.

@@ -1,0 +1,149 @@
+version: 1
+
+project_root: "01 Project"
+
+project_path_patterns:
+  - description: Year -> customer -> initiative -> stage
+    pattern: "01 Project/{year}/{customer}/{initiative}/{stage}"
+
+customer_template:
+  expected_children:
+    - initiative
+  allowed_children:
+    - initiative
+    - archive
+
+initiative_template:
+  required_stages:
+    - "A. PreSales"
+  optional_stages:
+    - "B. Delivery"
+    - "C. Post Sales"
+  valid_artifact_folders:
+    - "Requirements"
+    - "Proposal"
+    - "Clarification"
+    - "Timeline"
+    - "Presentation Slide"
+    - "Contract"
+    - "Meeting Notes"
+    - "Research"
+    - "References"
+
+# Canonical stage tree for presales projects.
+# Validation model: "required core + open extension".
+# - Core stages must exist (for active_presales lifecycle and later) with
+#   canonical names and canonical indices.
+# - Extension folders are allowed anywhere, as long as a letter-indexed prefix
+#   (e.g. "B.1.1.") matches the letter of its ancestor stage.
+canonical_stage_tree:
+  - prefix: "A"
+    label: "PreSales"
+    canonical: "A. PreSales"
+    optional_wrapper: true   # A.1/A.2 may sit directly under the initiative
+    children:
+      - prefix: "A.1"
+        label: "RFI_RFP_RFQ"
+        canonical: "A.1. RFI_RFP_RFQ"
+        core: true
+        children:
+          - {prefix: "A.1.1", label: "Logo", canonical: "A.1.1. Logo"}
+          - {prefix: "A.1.2", label: "Requirements", canonical: "A.1.2. Requirements"}
+          - {prefix: "A.1.3", label: "Meeting Notes", canonical: "A.1.3. Meeting Notes"}
+          - {prefix: "A.1.4", label: "Sample Data", canonical: "A.1.4. Sample Data"}
+      - prefix: "A.2"
+        label: "Proposal"
+        canonical: "A.2. Proposal"
+        core: true
+        children:
+          - {prefix: "A.2.1", label: "Clarification", canonical: "A.2.1. Clarification"}
+          - {prefix: "A.2.2", label: "Effort Estimation", canonical: "A.2.2. Effort Estimation"}
+          - {prefix: "A.2.3", label: "Timeline", canonical: "A.2.3. Timeline"}
+          - {prefix: "A.2.4", label: "Presentation Slide", canonical: "A.2.4. Presentation Slide"}
+          - {prefix: "A.2.5", label: "Contract", canonical: "A.2.5. Contract"}
+      # A.3 Engagement: non-document presales activities (events, sessions).
+      # These are presales work, not a separate archetype. Optional (not core).
+      - prefix: "A.3"
+        label: "Engagement"
+        canonical: "A.3. Engagement"
+        children:
+          - {prefix: "A.3.1", label: "Sharing Session", canonical: "A.3.1. Sharing Session"}
+          - {prefix: "A.3.2", label: "Internal Discussion", canonical: "A.3.2. Internal Discussion"}
+          - {prefix: "A.3.3", label: "Demo", canonical: "A.3.3. Demo"}
+          - {prefix: "A.3.4", label: "Workshop", canonical: "A.3.4. Workshop"}
+  - prefix: "B"
+    label: "Delivery"
+    canonical: "B. Delivery"
+    children: []
+  - prefix: "C"
+    label: "Post Sales"
+    canonical: "C. Post Sales"
+    children: []
+
+stage_template:
+  accepted_stages:
+    - canonical: "A. PreSales"
+      aliases:
+        - "A PreSales"
+        - "A. Presales"
+        - "PreSales"
+        - "Presales"
+    - canonical: "B. Delivery"
+      aliases:
+        - "B Delivery"
+        - "Delivery"
+    - canonical: "C. Post Sales"
+      aliases:
+        - "C Post Sales"
+        - "Post Sales"
+        - "PostSales"
+    - canonical: "A.1. RFI_RFP_RFQ"
+      aliases:
+        - "A.1. RFI"
+        - "A.1. RFI.RFP.RFQ"
+        - "RFI_RFP_RFQ"
+    - canonical: "A.1.4. Sample Data"
+      aliases:
+        - "Sample Data"
+    - canonical: "A.2. Proposal"
+      aliases:
+        - "A.2 Proposal"
+        - "Proposal"
+    - canonical: "A.2.1. Clarification"
+      aliases:
+        - "Clarification"
+    - canonical: "A.2.2. Effort Estimation"
+      aliases:
+        - "Effort Estimation"
+        - "Consumption_Estimation"
+        - "Consumption Estimation"
+    - canonical: "A.2.3. Timeline"
+      aliases:
+        - "Timeline"
+    - canonical: "A.2.4. Presentation Slide"
+      aliases:
+        - "Presentation Slide"
+        - "Presentation Slides"
+        - "Slides"
+    - canonical: "A.2.5. Contract"
+      aliases:
+        - "Contract"
+    - canonical: "A.3. Engagement"
+      aliases:
+        - "Engagement"
+    - canonical: "A.3.1. Sharing Session"
+      aliases:
+        - "Sharing Session"
+        - "Sharing"
+    - canonical: "A.3.2. Internal Discussion"
+      aliases:
+        - "Internal Discussion"
+        - "Internal_Meeting"
+        - "Internal Meeting"
+    - canonical: "A.3.3. Demo"
+      aliases:
+        - "Demo"
+        - "DEMO"
+    - canonical: "A.3.4. Workshop"
+      aliases:
+        - "Workshop"

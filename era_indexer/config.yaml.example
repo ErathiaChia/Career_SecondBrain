@@ -1,0 +1,113 @@
+# Era Vault indexer configuration.
+# Copy to config.yaml and edit for your environment.
+
+database:
+  # Postgres on the Synology. Must have pgvector extension available.
+  connection_string: "postgresql://era:CHANGEME@synology.local:5432/era_vault"
+
+paths:
+  # Roots of your knowledge base on the network mount.
+  # Add as many directories as you need; each is walked recursively.
+  source_directories:
+    - "/Volumes/Synology/Vault"
+    # - "/Volumes/Synology/AnotherVault"
+
+models:
+  # ---- Ollama embedding ----
+  # Must be pulled first on the indexer AND MCP hosts: `ollama pull bge-m3`
+  # bge-m3 is multilingual (EN+ZH), 1024-dim, 8k context. If you change this,
+  # update vector(N) dim in schema.sql, add a migration, and re-embed.
+  embedding_model: "bge-m3"
+  embedding_dim: 1024
+  graph_extraction_model: "qwen3.5:35b"
+
+  # ---- MLX Whisper (Apple Silicon, transcription only — no diarization) ----
+  # Runs on the Mac GPU via Metal. whisper_model is used only to derive the MLX
+  # repo when whisper_mlx_repo is unset.
+  whisper_model: "large-v3"          # or "medium", "small" for faster/lower-quality
+  whisper_mlx_repo: "mlx-community/whisper-large-v3-mlx"
+  whisper_language: null             # null = auto-detect per file
+  allowed_languages: ["en", "zh"]    # set to null to allow all detected languages
+  # Anti-hallucination decode options (see mlx_whisper.transcribe):
+  whisper_condition_on_previous_text: false   # stop repetition/failure loops
+  whisper_compression_ratio_threshold: 1.8    # re-roll repetitive segments (default 2.4)
+  # Optional extra decode knobs (forwarded only when set):
+  # whisper_no_speech_threshold: 0.6
+  # whisper_logprob_threshold: -1.0
+  # whisper_initial_prompt: null
+
+processing:
+  chunk_size: 1000          # flat-document + audio chunking
+  chunk_overlap: 200
+  max_retries: 3
+  # Parent-child ("small-to-big"): children are embedded; parents returned as
+  # context. Sizes are in characters (~4 chars/token).
+  parent_chunk_size: 2400
+  parent_chunk_overlap: 200
+  child_chunk_size: 600
+  child_chunk_overlap: 120
+
+document_images:
+  descriptions_enabled: false
+  formats: [".pdf", ".docx", ".pptx", ".xlsx"]
+  # Local Ollama OpenAI-compatible endpoint. Requires a vision model pulled first.
+  api_url: "http://localhost:11434/v1/chat/completions"
+  model: "gemma3:27b"
+  max_completion_tokens: 2000
+  timeout_seconds: 180
+  concurrency: 3
+  # OCR runs on every page; on digital documents it dominates runtime and the
+  # vision captioner already covers text in images. Enable only for scans.
+  ocr_enabled: false
+  images_scale: 2.0
+  generate_picture_images: true
+  prompt: |
+    Describe this image for a personal knowledge-base search index.
+    Be detailed and factual. Capture visible text, diagrams, charts, tables,
+    UI screenshots, workflows, entities, labels, and relationships.
+    If the image is decorative or contains no useful information, say so briefly.
+
+# V2 rollout flags. Keep disabled until each phase is validated on a small folder.
+v2:
+  structure_aware_chunking_enabled: true
+  contextual_embeddings_enabled: true
+  parent_child_retrieval_enabled: true
+  hybrid_search_enabled: false
+  reranker_enabled: false
+  entity_extraction_enabled: false
+  relationship_extraction_enabled: false
+  graph_retrieval_enabled: false
+
+  # Continuous sync wraps the existing discover + run flow.
+  sync_interval_seconds: 300
+
+  # Optional override for graph extraction; defaults to local Ollama.
+  graph_ollama_base_url: "http://localhost:11434"
+
+  # When contextual_embeddings_enabled is true, each chunk is embedded (and
+  # keyword-indexed) with a compact, labeled context header built in code from
+  # filename-derived fields (client, product, doc type, version, IDs), folder,
+  # document title, section path, and chunk type. See structure._context_header.
+
+v3:
+  knowledge_os_enabled: false
+  summaries_enabled: false
+  communities_enabled: false
+  graph_metadata_enabled: false
+  knowledge_retrieval_enabled: false
+  graph_export_enabled: true
+
+  summary_model: "extractive-local"
+  summary_prompt_version: "v3-summary-v1"
+  community_algorithm: "relationship-neighborhood"
+  community_algorithm_version: "v3-community-v1"
+
+extensions:
+  audio:     [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".mov"]
+  documents: [".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt"]
+
+huggingface:
+  # Required ONLY for the first-time pyannote model download.
+  # After `era bootstrap` succeeds, models are cached locally and you can run
+  # fully offline. Prefer setting HF_TOKEN env var over storing it here.
+  token: ""

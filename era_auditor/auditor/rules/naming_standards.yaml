@@ -1,0 +1,120 @@
+version: 1
+
+temporal:
+  year_pattern: "^20[0-9]{2}$"
+  month_pattern: "^(0[1-9]|1[0-2])$"
+  names_are_reusable_partitions: true
+
+# Repository constitution: numbering is used for ordering, grouping, and
+# navigation. Numbers are NOT unique identifiers. Sibling folders may share
+# the same numeric prefix ("01 Daily_Todo" next to "01 Internal_Meeting_Notes")
+# and no findings are generated for that. Stage indices ("A.2.5.") remain
+# identifiers and are still validated by the template differ.
+numbering_policy: ordering_not_identity
+
+# Generic organizational container names. Folders with these (normalized)
+# names organize knowledge, they are not knowledge themselves. Duplication
+# detection and topic comparison never operate on containers.
+container_names:
+  - resources
+  - resource
+  - templates
+  - template
+  - materials
+  - slides
+  - assets
+  - drafts
+  - draft
+  - final
+  - misc
+  - others
+  - general
+  - demo
+  - good
+  - bad
+  - backup
+  - downloads
+  - images
+  - icons
+  - logo
+  - logos
+  - documents
+  - files
+  - notes
+  - references
+  - working
+  - wip
+  - output
+  - input
+  - data
+
+duplicate_detection:
+  ignore_exact_names:
+    - "."
+    - "archive"
+    - "old"
+    - "2024"
+    - "2025"
+    - "2026"
+    - "2027"
+    - "A. PreSales"
+    - "B. Delivery"
+    - "C. Post Sales"
+    - "Proposal"
+    - "Timeline"
+    - "Contract"
+    - "Meeting Notes"
+  ignore_roles:
+    - root
+    - inbox
+    - temporal
+    - customer
+    - stage
+    - project_artifact
+
+stage_names:
+  - canonical: "A. PreSales"
+    aliases: ["A PreSales", "A. Presales", "PreSales", "Presales"]
+  - canonical: "B. Delivery"
+    aliases: ["B Delivery", "Delivery"]
+  - canonical: "C. Post Sales"
+    aliases: ["C Post Sales", "Post Sales", "PostSales"]
+  - canonical: "A.1. RFI_RFP_RFQ"
+    aliases: ["A.1. RFI", "A.1. RFI.RFP.RFQ", "RFI_RFP_RFQ"]
+  - canonical: "A.1.4. Sample Data"
+    aliases: ["Sample Data"]
+  - canonical: "A.2. Proposal"
+    aliases: ["A.2 Proposal", "Proposal"]
+  - canonical: "A.2.1. Clarification"
+    aliases: ["Clarification"]
+  - canonical: "A.2.2. Effort Estimation"
+    aliases: ["Effort Estimation", "Consumption_Estimation", "Consumption Estimation"]
+  - canonical: "A.2.3. Timeline"
+    aliases: ["Timeline"]
+  - canonical: "A.2.4. Presentation Slide"
+    aliases: ["Presentation Slide", "Presentation Slides", "Slides"]
+  - canonical: "A.2.5. Contract"
+    aliases: ["Contract"]
+  - canonical: "A.3. Engagement"
+    aliases: ["Engagement"]
+  - canonical: "A.3.1. Sharing Session"
+    aliases: ["Sharing Session", "Sharing"]
+  - canonical: "A.3.2. Internal Discussion"
+    aliases: ["Internal Discussion", "Internal_Meeting", "Internal Meeting"]
+  - canonical: "A.3.3. Demo"
+    aliases: ["Demo", "DEMO"]
+  - canonical: "A.3.4. Workshop"
+    aliases: ["Workshop"]
+
+unknown_code_review:
+  code_pattern: "^[0-9]{2}_[A-Z0-9_]+$"
+  review_only_after_customer_registry_lookup: true
+
+# Known misspellings observed in the vault. Keys are matched as
+# case-insensitive substrings of folder names.
+known_typos:
+  challanges: "Challenges"
+  methology: "Methodology"
+  discssion: "Discussion"
+  additonal: "Additional"
+  valudation: "Validation"

@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+config.yaml
+
+__pycache__/
+*.py[cod]
+.venv/
+
+node_modules/
+era_graph_web/dist/
+.DS_Store
+
+*.tsbuildinfo
+*.tar.gz
+/era
+era_graph_web/vite.config.d.ts

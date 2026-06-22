@@ -1,0 +1,26 @@
+# Era Vault "read" side on the Synology NAS.
+#
+# Postgres and Ollama already run as separate NAS containers. This compose file
+# only rebuilds/recreates the OpenWebUI-compatible MCP/API container and reaches
+# those existing services through their published NAS ports.
+
+services:
+  mcp-server:
+    container_name: era-vault-mcp
+    build:
+      context: ..
+      dockerfile: era_mcp/Dockerfile
+    restart: always
+    env_file:
+      - ../.env
+    environment:
+      ERA_VAULT_DB_HOST: 192.168.50.50
+      ERA_VAULT_DB_PORT: "15432"
+      ERA_VAULT_DB_NAME: era_vault
+      ERA_VAULT_DB_USER: era
+      OLLAMA_BASE_URL: http://192.168.50.50:11434
+      # Must match the indexer's embedding model + the vector(1024) schema.
+      # Pull it on the NAS Ollama first: `ollama pull bge-m3`.
+      EMBEDDING_MODEL: bge-m3
+    ports:
+      - "8808:8808"

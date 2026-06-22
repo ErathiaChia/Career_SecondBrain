@@ -1,0 +1,15 @@
+version: 1
+
+decisions: []
+
+suppression_patterns:
+  - pattern_key: "structural:temporal:not_duplicate"
+    issue_type: duplicate_topic
+    folder_role: temporal
+    decision: suppress
+    rationale: Year folders are intentional time partitions.
+  - pattern_key: "structural:inbox:not_orphan"
+    issue_type: orphan_folder
+    folder_role: inbox
+    decision: suppress
+    rationale: Empty agent inbox is a healthy ingestion state.

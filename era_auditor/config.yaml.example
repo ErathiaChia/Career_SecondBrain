@@ -1,0 +1,49 @@
+# AI Auditor Agent configuration.
+# Copy to config.yaml and edit for your environment.
+
+database:
+  connection_string: "${AUDITOR_DATABASE_URL}"
+
+openai:
+  api_key_env: "OPENAI_API_KEY"
+  model: "${OPENAI_MODEL:-gpt-4.1-mini}"
+  temperature: 0.1
+  max_retries: 3
+
+paths:
+  source_directories:
+    - "/Volumes/Synology/Vault"
+  report_directory: "reports"
+
+scanner:
+  sample_file_limit: 12
+  max_depth: null
+  ignore_names:
+    - ".DS_Store"
+    - ".git"
+    - ".venv"
+    - ".conda"
+    - ".idea"
+    - ".github"
+    - ".vscode"
+    - ".cache"
+    - "__pycache__"
+    - "node_modules"
+    - "dist"
+    - "build"
+    - "reports"
+  ignore_subtrees:
+    # Relative-path globs (from each scan root) skipped entirely, e.g.
+    # app-settings backups that are not knowledge.
+    - "05 Administrative/03 Settings"
+  ignore_suffixes:
+    - ".tmp"
+    - ".temp"
+    - ".part"
+    - ".download"
+
+auditor:
+  default_limit: 50
+  high_confidence_threshold: 0.85
+  medium_confidence_threshold: 0.65
+  changed_context_depth: 1

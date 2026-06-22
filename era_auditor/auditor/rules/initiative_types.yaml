@@ -1,0 +1,142 @@
+# Initiative archetypes.
+#
+# Not every initiative is a sales opportunity. Each archetype declares what a
+# healthy initiative of that type looks like, so the auditor validates against
+# organizational intent instead of forcing one sales template everywhere.
+#
+# Fields per archetype:
+#   description       what this initiative type is
+#   uses_stage_tree   true -> validate against canonical_stage_tree in
+#                     project_templates.yaml (sales lifecycle A/B/C)
+#   expected_folders  advisory folder names for this archetype (informational;
+#                     missing ones are never findings, they guide the LLM and
+#                     reviewer)
+#   signals           lowercase substrings of the initiative folder name or its
+#                     children used for deterministic type inference
+version: 1
+
+default_type: sales_opportunity
+
+initiative_types:
+  sales_opportunity:
+    description: >
+      A pursuit with a sales lifecycle: presales, proposal, delivery, post
+      sales. The canonical A/B/C stage tree applies.
+    uses_stage_tree: true
+    expected_folders: []
+    signals:
+      children_any:
+        - "a. presales"
+        - "a.1"
+        - "a.2"
+        - "b. delivery"
+        - "c. post sales"
+
+  delivery_project:
+    description: >
+      A committed delivery engagement (contract already won). Stage tree
+      applies but presales completeness is historical, not enforced.
+    uses_stage_tree: true
+    expected_folders: []
+    signals:
+      name_any:
+        - "delivery"
+        - "implementation"
+        - "rollout"
+
+  workshop:
+    description: >
+      A workshop or sharing session delivered to a customer or community.
+      No sales lifecycle expected.
+    uses_stage_tree: false
+    expected_folders:
+      - "Materials"
+      - "Slides"
+      - "Meeting Notes"
+    signals:
+      name_any:
+        - "workshop"
+        - "sharing"
+        - "trends sharing"
+        - "lunch and learn"
+        - "brown bag"
+        - "masterclass"
+        - "bootcamp"
+
+  training_engagement:
+    description: >
+      A training engagement. May carry a sales lifecycle when sold as an
+      opportunity; classified as sales_opportunity when stage folders exist.
+    uses_stage_tree: false
+    expected_folders:
+      - "Curriculum"
+      - "Materials"
+      - "Slides"
+    signals:
+      name_any:
+        - "training"
+        - "course"
+        - "curriculum"
+        - "enablement"
+
+  strategic_initiative:
+    description: >
+      A strategic or advisory engagement: planning, discussions, roadmaps.
+      No sales lifecycle expected.
+    uses_stage_tree: false
+    expected_folders:
+      - "Discussions"
+      - "Planning"
+      - "Deliverables"
+    signals:
+      name_any:
+        - "strategy"
+        - "strategic"
+        - "roadmap"
+        - "advisory"
+        - "transformation"
+
+  architecture_artifact:
+    description: >
+      A standalone architecture or design artifact (diagram, reference
+      architecture, design doc). A full project lifecycle is never required.
+    uses_stage_tree: false
+    expected_folders: []
+    signals:
+      name_any:
+        - "architecture"
+        - "architecture diagram"
+        - "reference architecture"
+        - "solution design"
+        - "blueprint"
+
+  research_activity:
+    description: >
+      Research, evaluation, or POC exploration. No sales lifecycle expected.
+    uses_stage_tree: false
+    expected_folders:
+      - "Research"
+      - "References"
+    signals:
+      name_any:
+        - "research"
+        - "poc"
+        - "proof of concept"
+        - "evaluation"
+        - "spike"
+        - "feasibility"
+
+  support_activity:
+    description: >
+      Ongoing support, maintenance, or operational assistance for an existing
+      customer. No sales lifecycle expected.
+    uses_stage_tree: false
+    expected_folders:
+      - "Tickets"
+      - "Meeting Notes"
+    signals:
+      name_any:
+        - "support"
+        - "maintenance"
+        - "bau"
+        - "managed service"

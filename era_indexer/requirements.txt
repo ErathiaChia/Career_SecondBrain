@@ -1,0 +1,24 @@
+# Era Vault indexer dependencies.
+# Tested on Python 3.11+ / Apple Silicon.
+
+# Core
+pyyaml>=6.0
+typer>=0.12
+rich>=13.7
+
+# Database
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pgvector>=0.2.5
+
+# Text processing
+langchain-text-splitters>=0.2
+langchain-ollama>=0.2
+
+# Audio: MLX Whisper (Apple Silicon, transcription only — no diarization)
+# Also install FFmpeg: `brew install ffmpeg` (used to decode audio).
+mlx-whisper>=0.4.3
+
+# Documents: Docling (pulls in its own torch)
+docling>=2.52.0
+torch>=2.1

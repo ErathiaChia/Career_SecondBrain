@@ -1,0 +1,108 @@
+version: 1
+principles:
+  - The auditor observes, analyzes, recommends, and explains.
+  - The auditor must not move, rename, delete, archive, or create user knowledge folders.
+  - High-confidence recommendations may suggest a destination, but execution remains a human decision.
+  - Low-confidence recommendations must be marked as review-needed rather than direct cleanup actions.
+
+folder_types:
+  root:
+    description: Structural top-level category. Root folders are not content and should not be audited as misplaced resources.
+  inbox:
+    description: Intentional temporary staging area for agent or user triage. May be empty.
+  temporal:
+    description: Year/month/time partition used to organize work chronologically. Repeated temporal names are not duplicate topics.
+  customer:
+    description: Customer or account folder, often represented by a code.
+  initiative:
+    description: Specific project, engagement, or workstream under a customer.
+  stage:
+    description: Template stage or project phase such as PreSales, Delivery, Post Sales, Proposal, Timeline, or Contract.
+  project_artifact:
+    description: Project artifact folder that belongs inside a valid project template.
+  project:
+    description: Customer-specific, engagement-specific, or time-bound delivery work.
+    examples:
+      - Customer engagements
+      - Client workshops
+      - Internal project delivery folders
+  resource:
+    description: Reusable knowledge, templates, reference material, research, and assets useful across customers or future work.
+    examples:
+      - Templates
+      - Reusable decks
+      - Knowledge assets
+      - Research notes
+  product:
+    description: Genie or product-related work, product design, roadmap, features, and technical product materials.
+  administration:
+    description: HR, finance, legal, vendors, company operations, and administrative records.
+  operations:
+    description: Meetings, todos, events, recurring planning, execution notes, and operating rhythms.
+  code_repo:
+    description: Code repository (git project, scripts, models). Treated as one opaque leaf; internals are working files and never audited as knowledge folders.
+  unknown:
+    description: Folders that cannot be confidently classified from available metadata.
+
+top_level_folders:
+  "00 Agent Inbox":
+    type: inbox
+    purpose: Temporary ingestion area for files arriving before triage.
+    may_be_empty: true
+    healthy_when_empty: true
+    expected_future_subfolders:
+      - Incoming
+      - Processing
+      - NeedsReview
+      - Failed
+  "01 Project":
+    type: root
+    purpose: Customer-facing project work.
+    rule: Project knowledge belongs here even if it may become reusable later.
+    expected_children:
+      - temporal
+      - customer
+      - initiative
+  "02 Ops(Presales_Project_Product)":
+    type: root
+    purpose: Internal operations, todos, meeting notes, internal presentations, events, lead lists, and operating rhythm.
+    year_based_records_are_valid: true
+    # category_type: descendants that match no more specific rule inherit this
+    # folder_type (deterministic, low confidence) instead of going to the LLM.
+    category_type: operations
+  "03 Product":
+    type: root
+    purpose: Genie product strategy, roadmap, development, governance, backlog, and workshops.
+    rule: Product work is not customer work.
+    category_type: product
+  "04 Resources":
+    type: root
+    purpose: Reusable organizational assets, templates, training, demos, pricing, and knowledge assets.
+    rule: Reusable assets should eventually converge here.
+    category_type: resource
+  "05 Administrative":
+    type: root
+    purpose: HR, hiring, claims, KPI, onboarding, internal policies, finance, vendor, and company administration records.
+    rule: Administrative assets are company-specific, not customer-specific.
+    category_type: administration
+
+rules:
+  - Projects are customer-specific or engagement-specific.
+  - Resources are reusable across customers or future work.
+  - Product contains Genie/product-related work.
+  - Administration contains HR, finance, vendor, and company operations.
+  - Operations contains meetings, todos, planning, events, and recurring execution.
+  - Avoid duplicate knowledge assets.
+  - Prefer recommendations over actions.
+  - Never recommend moves with low confidence as direct actions; list them as review-needed.
+
+issue_types:
+  - template_drift
+  - naming_inconsistency
+  - resource_leakage
+  - knowledge_duplication
+  - project_completeness
+  - orphaned_knowledge
+  - unknown_customer
+  - unknown_initiative
+  - naming_ambiguity

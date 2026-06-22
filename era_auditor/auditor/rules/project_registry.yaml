@@ -1,0 +1,315 @@
+version: 1
+
+# Project registry: one row per initiative.
+#
+# Lifecycle gates template enforcement:
+#   lead            -> no template requirements
+#   active_presales -> core stages required
+#   delivery        -> core stages required
+#   archived        -> no template requirements
+#
+# initiative_type controls WHICH template applies (see initiative_types.yaml):
+#   sales_opportunity / delivery_project -> canonical A/B/C stage tree
+#   workshop / strategic_initiative / architecture_artifact / research_activity
+#     / training_engagement / support_activity -> no sales lifecycle required.
+
+projects:
+  # ---------------------------------------------------------------------
+  # 01_IBF - Institute of Banking and Finance (multi-initiative customer)
+  # ---------------------------------------------------------------------
+  - project_id: "2026-IBF-AI-STAFF-TRAINING"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: AI Staff Training
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/1 AI Staff Training"
+    tags: ["training", "genai", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-IBF-CPX-AI-USECASE"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: CPX - AI Use Case
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/2 CPX - AI Use Case"
+    tags: ["genai", "use-case", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-IBF-GENAI-TRENDS-SHARING"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: GenAI Trends Sharing
+    status: active
+    lifecycle: lead
+    initiative_type: workshop
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/3 GenAI_Trends_Sharing"
+    tags: ["genai", "sharing", "workshop"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-IBF-IVEE-ARCHITECTURE-DIAGRAM"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: IVEE Architecture Diagram
+    status: active
+    lifecycle: lead
+    initiative_type: architecture_artifact
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/4 IVEE Architecture Diagram"
+    tags: ["architecture", "ivee"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-IBF-STRATEGY-FORWARD"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: Strategy Forward
+    status: active
+    lifecycle: lead
+    initiative_type: strategic_initiative
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/5 Strategy Forward"
+    tags: ["strategy", "advisory"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-IBF-TRANSFORMATION-ACCREDITATION"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: Transformation of IBF Programme Accreditation
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/6 Transformation of IBF Programme Accreditation"
+    tags: ["transformation", "accreditation", "presales"]
+    last_updated: "2026-06-13"
+
+  # ---------------------------------------------------------------------
+  # Single-initiative customers
+  # ---------------------------------------------------------------------
+  # MODEL: these customers are single-initiative, so the customer FOLDER is also
+  # the initiative folder (the A/B/C stage tree sits directly under it, e.g.
+  # 02_Bank_Negara/A.1. RFI_RFP_RFQ). folder_path therefore points at the
+  # customer folder and it classifies as folder_type=initiative (registry, 1.0).
+  # Multi-initiative customers (like 01_IBF) instead register one row per
+  # sub-folder initiative.
+  - project_id: "2026-BNM-AI-PROPOSAL"
+    customer_code: BANK_NEGARA
+    customer_name: Bank Negara Malaysia
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/02_Bank_Negara"
+    tags: ["banking", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-HONGLEONG-AI-POC"
+    customer_code: HONGLEONG
+    customer_name: Hong Leong Bank
+    initiative_name: AI PoC
+    status: active
+    lifecycle: delivery
+    initiative_type: delivery_project
+    year: 2026
+    folder_path: "01 Project/2026/03_HongLeong"
+    tags: ["banking", "poc", "delivery"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-DBS-AI"
+    customer_code: DBS
+    customer_name: DBS Bank
+    initiative_name: AI Opportunity
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/04_DBS"
+    tags: ["banking", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-ITE-AMK-AI-PROPOSAL"
+    customer_code: ITE_AMK
+    customer_name: Institute of Technical Education (Ang Mo Kio)
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/05_ITE_AMK"
+    tags: ["education", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-MUSIMMAS-AI-PROPOSAL"
+    customer_code: MUSIMMAS
+    customer_name: Musim Mas
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/06_MusimMas"
+    tags: ["presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-MY-MOH-AI-PROPOSAL"
+    customer_code: MY_MOH
+    customer_name: Ministry of Health (Malaysia)
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/07_MY_MOH"
+    tags: ["healthcare", "government", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-NUHS-INITIATIVE"
+    customer_code: NUHS
+    customer_name: National University Health System
+    initiative_name: AI Strategy
+    status: active
+    lifecycle: lead
+    initiative_type: strategic_initiative
+    year: 2026
+    folder_path: "01 Project/2026/08_NUHS"
+    tags: ["healthcare", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-SG-MOH-C3-DEROM"
+    customer_code: SG_MOH_C3_DEROM
+    customer_name: Ministry of Health (Singapore) - C3 DEROM
+    initiative_name: C3 DEROM
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/09_SG-MOH C3 (DEROM)"
+    tags: ["healthcare", "government", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-SPH-AI"
+    customer_code: SPH
+    customer_name: Singapore Press Holdings
+    initiative_name: AI Opportunity
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/10_SPH"
+    tags: ["media", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-TRUE-TELECOM-AI-PROPOSAL"
+    customer_code: THAILAND_TRUE_TELECOM
+    customer_name: True Telecom (Thailand)
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/11_Thailand - True Telecom"
+    tags: ["telecom", "thailand", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-TTSH-EYE-CLINIC"
+    customer_code: TTSH_EYE_CLINIC
+    customer_name: Tan Tock Seng Hospital - Eye Clinic
+    initiative_name: Eye Clinic AI
+    status: active
+    lifecycle: delivery
+    initiative_type: delivery_project
+    year: 2026
+    folder_path: "01 Project/2026/12_TTSH - Eye Clinic"
+    tags: ["healthcare", "ml", "delivery"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-HCLTECH-AI-PROPOSAL"
+    customer_code: HCLTECH
+    customer_name: HCLTech
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/13_HCLTech"
+    tags: ["technology", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-SENTOSA-AI-PROPOSAL"
+    customer_code: SENTOSA
+    customer_name: Sentosa Development Corporation
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/14_Sentosa"
+    tags: ["presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-HC3-AI-PROPOSAL"
+    customer_code: HC3
+    customer_name: HC3
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/16_HC3"
+    tags: ["presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-HSA-ARCHITECTURE"
+    customer_code: HSA
+    customer_name: Health Sciences Authority
+    initiative_name: AI Architecture
+    status: active
+    lifecycle: lead
+    initiative_type: architecture_artifact
+    year: 2026
+    folder_path: "01 Project/2026/17_HSA"
+    tags: ["healthcare", "architecture", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-VANGUARD-HEALTH-AI-PROPOSAL"
+    customer_code: VANGUARDHEALTH
+    customer_name: Vanguard Health
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/18_VanguardHealth"
+    tags: ["healthcare", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-TAIYOYUDEN-AI-PROPOSAL"
+    customer_code: TAIYOYUDEN
+    customer_name: Taiyo Yuden
+    initiative_name: AI Proposal
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/19_TaiyoYuden"
+    tags: ["manufacturing", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-TEMASEKPOLY-SMART-CONTRACT"
+    customer_code: TP
+    customer_name: TP
+    initiative_name: Smart Contract
+    status: active
+    lifecycle: lead
+    initiative_type: research_activity
+    year: 2026
+    folder_path: "01 Project/2026/20_TemasekPoly_SmartContract"
+    tags: ["education", "smart-contract", "research"]
+    last_updated: "2026-06-13"

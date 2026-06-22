@@ -1,0 +1,90 @@
+version: 1
+
+# Customer registry: the single source of truth for known customers.
+#
+# Keys MUST equal the folder-derived code produced by
+# FolderConstitution.customer_code() / relaxed_customer_code():
+#   "02_Bank_Negara"            -> BANK_NEGARA
+#   "12_TTSH - Eye Clinic"      -> TTSH_EYE_CLINIC  (spaces -> underscores)
+#   "20_TemasekPoly_SmartContract" -> TEMASEKPOLY_SMARTCONTRACT
+# so known_customer() resolves the folder to this entry at high confidence.
+#
+# NOTE: MY_MOH.full_name is test-pinned (tests/test_constitution.py:58-59).
+
+customers:
+  IBF:
+    full_name: Institute of Banking and Finance
+    industry: Financial Services
+    country: Singapore
+  BANK_NEGARA:
+    full_name: Bank Negara Malaysia
+    industry: Financial Services
+    country: Malaysia
+  HONGLEONG:
+    full_name: Hong Leong Bank
+    industry: Banking
+    country: Malaysia
+  DBS:
+    full_name: DBS Bank
+    industry: Financial Services
+    country: Singapore
+  ITE_AMK:
+    full_name: Institute of Technical Education (Ang Mo Kio)
+    industry: Education
+    country: Singapore
+  MUSIMMAS:
+    full_name: Musim Mas
+    industry: Manufacturing
+    country: Singapore
+  MY_MOH:
+    full_name: Malaysia Ministry of Health
+    industry: Healthcare
+    country: Malaysia
+  NUHS:
+    full_name: National University Health System
+    industry: Healthcare
+    country: Singapore
+  SG_MOH_C3_DEROM:
+    full_name: Ministry of Health (Singapore) - C3 DEROM
+    industry: Healthcare
+    country: Singapore
+  SPH:
+    full_name: Singapore Press Holdings
+    industry: Media
+    country: Singapore
+  THAILAND_TRUE_TELECOM:
+    full_name: True Telecom (Thailand)
+    industry: Telecommunications
+    country: Thailand
+  TTSH_EYE_CLINIC:
+    full_name: Tan Tock Seng Hospital - Eye Clinic
+    industry: Healthcare
+    country: Singapore
+  HCLTECH:
+    full_name: HCLTech
+    industry: Technology Services
+    country: India
+  SENTOSA:
+    full_name: Sentosa Development Corporation
+    industry: Hospitality
+    country: Singapore
+  HC3:
+    full_name: Health Care System (Command, Control, Commuication)
+    industry: Healthcare
+    country: Singapore
+  HSA:
+    full_name: Health Sciences Authority
+    industry: Healthcare
+    country: Singapore
+  VANGUARDHEALTH:
+    full_name: Vanguard Health
+    industry: Healthcare
+    country: Singapore
+  TAIYOYUDEN:
+    full_name: Taiyo Yuden
+    industry: Manufacturing
+    country: Japan
+  TP:
+    full_name: Temasek Polytechnic
+    industry: Education
+    country: Singapore
