@@ -16,7 +16,7 @@ def _require(var: str) -> str:
 
 def database_url() -> str:
     host = os.environ.get("ERA_VAULT_DB_HOST", "postgres")
-    port = os.environ.get("ERA_VAULT_DB_PORT", "5432")
+    port = os.environ.get("ERA_VAULT_DB_PORT", "15432")
     name = os.environ.get("ERA_VAULT_DB_NAME", "era_vault")
     user = os.environ.get("ERA_VAULT_DB_USER", "era")
     password = _require("ERA_VAULT_DB_PASSWORD")
@@ -29,8 +29,8 @@ def ollama_base_url() -> str:
 
 def embedding_model() -> str:
     """Query embedding model. MUST match the model the indexer embedded with
-    (bge-m3, 1024-dim). Override via EMBEDDING_MODEL in docker-compose."""
-    return os.environ.get("EMBEDDING_MODEL", "bge-m3")
+    (qwen3-embedding:0.6b, 1024-dim). Override via EMBEDDING_MODEL in docker-compose."""
+    return os.environ.get("EMBEDDING_MODEL", "qwen3-embedding:0.6b")
 
 
 def parent_context_enabled() -> bool:
@@ -114,7 +114,7 @@ def openai_base_url() -> str:
 
 
 def openai_model() -> str:
-    return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    return os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 
 def llm_max_tokens() -> int:

@@ -20,8 +20,8 @@ services:
       ERA_VAULT_DB_USER: era
       OLLAMA_BASE_URL: http://192.168.50.50:11434
       # Must match the indexer's embedding model + the vector(1024) schema.
-      # Pull it on the NAS Ollama first: `ollama pull bge-m3`.
-      EMBEDDING_MODEL: bge-m3
+      # Pull it on the NAS Ollama first: `ollama pull qwen3-embedding:0.6b`.
+      EMBEDDING_MODEL: qwen3-embedding:0.6b
 
       # ---- Agent layer (/ask): query rewrite + rerank + answer synthesis ----
       # The heavy LLM runs on the M1 Max (the 6 GB NAS Ollama can't host it).

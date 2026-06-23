@@ -76,9 +76,9 @@ CREATE INDEX IF NOT EXISTS idx_segments_file ON speaker_segments(file_id);
 -- speaker_segment_id is NULL for non-audio files; links audio chunks back to
 -- the diarized segment so RAG queries can attribute results to a speaker.
 --
--- NOTE: vector(1024) matches Ollama's bge-m3. If you change the embedding
--- model, change this dimension AND add a migration to ALTER the column, then
--- re-embed everything.
+-- NOTE: vector(1024) matches Ollama's qwen3-embedding:0.6b. If you change to
+-- a model with a different embedding dimension, change this dimension AND add
+-- a migration to ALTER the column, then re-embed everything.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS document_chunks (
     id                  SERIAL PRIMARY KEY,

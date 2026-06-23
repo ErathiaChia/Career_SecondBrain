@@ -14,10 +14,12 @@ paths:
 
 models:
   # ---- Ollama embedding ----
-  # Must be pulled first on the indexer AND MCP hosts: `ollama pull bge-m3`
-  # bge-m3 is multilingual (EN+ZH), 1024-dim, 8k context. If you change this,
-  # update vector(N) dim in schema.sql, add a migration, and re-embed.
-  embedding_model: "bge-m3"
+  # Must be pulled first on the indexer AND MCP hosts:
+  #   `ollama pull qwen3-embedding:0.6b`
+  # Qwen3-Embedding-0.6B is multilingual (EN+ZH), 1024-dim, and has a 32k
+  # context window. If you change to a different dimension, update vector(N) dim
+  # in schema.sql, add a migration, and re-embed.
+  embedding_model: "qwen3-embedding:0.6b"
   embedding_dim: 1024
   # Graph extraction + contextual-blurb LLM. Runs on the Mac (the NAS Ollama is
   # too small). A 9B MLX model is fast on Metal and reliable at JSON; avoid 35B
@@ -47,11 +49,12 @@ processing:
   chunk_overlap: 200
   max_retries: 3
   # Parent-child ("small-to-big"): children are embedded; parents returned as
-  # context. Sizes are in characters (~4 chars/token).
-  parent_chunk_size: 2400
-  parent_chunk_overlap: 200
-  child_chunk_size: 600
-  child_chunk_overlap: 120
+  # context. Sizes are in characters (~4 chars/token). The balanced Qwen3
+  # profile reduces chunk count while preserving focused child matches.
+  parent_chunk_size: 10000
+  parent_chunk_overlap: 400
+  child_chunk_size: 2000
+  child_chunk_overlap: 200
 
 document_images:
   descriptions_enabled: false

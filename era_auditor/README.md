@@ -18,6 +18,19 @@ python -m auditor.cli run         # full steward pass (scan -> assets -> AI -> f
 python -m auditor.cli report latest
 ```
 
+## Ecosystem
+
+| Component | Role |
+|-----------|------|
+| [`era_indexer`](../era_indexer) | Write — discover, convert, chunk, embed, graph extract |
+| [`era_mcp`](../era_mcp) | Read — hybrid search, `/ask` agent, OpenAPI tools |
+| **era_auditor** (this) | Steward — vault hygiene, semantic dupes, Librarian training |
+| [`era_graph_web`](../era_graph_web) | Visualize — Sigma.js graph viewer at `/graph` |
+
+The auditor scans the same vault roots as the indexer, writes `auditor_*` tables,
+and optionally reads indexer embeddings for semantic dupes and placement simulation.
+See the [repo masterplan](../README.md) for the full architecture.
+
 ## Architecture
 
 The auditor reasons about KNOWLEDGE ASSETS, not folder names. Folders are
@@ -96,7 +109,6 @@ era_auditor/
 │   │                              three audit-question gates.
 │   │
 │   └── rules/                 Human-editable YAML knowledge base:
-│       ├── customer_registry.yaml     Known customer codes -> names/industry.
 │       ├── customer_registry.yaml     Known customers (single source of truth).
 │       ├── project_registry.yaml      Known projects + lifecycle + initiative_type.
 │       ├── initiative_types.yaml      Archetypes that decide which template applies.

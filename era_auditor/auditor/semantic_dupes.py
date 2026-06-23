@@ -7,7 +7,7 @@ bytes differ.
 
 It reuses the indexer's existing tables in the same Postgres instance:
 - file_registry (file_path, file_name, file_hash)
-- document_chunks (file_id, embedding vector(768))
+- document_chunks (file_id, embedding vector(1024))
 
 Per candidate file pair sharing no content hash, the mean chunk embedding
 of each file is compared with cosine distance in SQL. Pairs above the

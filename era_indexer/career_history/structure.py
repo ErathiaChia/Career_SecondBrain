@@ -21,10 +21,10 @@ from career_history import config, filename as filename_parser
 STRUCTURE_VERSION = "markdown-headings-v1"
 # Bumped when contextual (filename-aware) embedding text is produced so
 # re-embedded chunks are distinguishable from raw-body-only chunks.
-EMBEDDING_CONTENT_VERSION = "markdown-headings-ctx-v1"
+EMBEDDING_CONTENT_VERSION = "markdown-headings-ctx-qwen3-v1"
 # Used when an LLM situating blurb (Anthropic-style Contextual Retrieval) is also
 # folded into the embedded text — a distinct version forces a clean re-embed.
-EMBEDDING_CONTENT_VERSION_BLURB = "markdown-headings-ctx-blurb-v1"
+EMBEDDING_CONTENT_VERSION_BLURB = "markdown-headings-ctx-blurb-qwen3-v1"
 
 # Field label, metadata key. Order controls how the context header reads.
 _HEADER_FIELDS = [

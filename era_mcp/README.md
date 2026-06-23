@@ -1,11 +1,27 @@
-# Era Vault MCP / API Server
+# Era Vault API Server (`era_mcp`)
 
-The **"read" half** of Era Vault. A lightweight FastAPI service that exposes
+The **read** half of Era Vault. A lightweight FastAPI service that exposes
 semantic search over your indexed knowledge base as REST endpoints with an
 auto-generated OpenAPI spec, so [Open WebUI](https://openwebui.com/) (and any
 OpenAPI tool client) can discover and call them as tools.
 
-The [`era_indexer`](../era_indexer) is the "write" half: it walks your files,
+> **Naming note:** the folder is `era_mcp`, but this is an **OpenAPI REST
+> server**, not a stdio MCP protocol server. Open WebUI registers each endpoint's
+> `operation_id` (`search_vault`, `ask_vault`, …) as a callable tool.
+
+See the [repo masterplan](../README.md) for how all four Era Vault components
+fit together.
+
+## Ecosystem
+
+| Component | Role |
+|-----------|------|
+| [`era_indexer`](../era_indexer) | Write — discover, convert, chunk, embed, graph extract |
+| **era_mcp** (this) | Read — hybrid search, `/ask` agent, OpenAPI tools |
+| [`era_auditor`](../era_auditor) | Steward — vault hygiene, semantic dupes, Librarian training |
+| [`era_graph_web`](../era_graph_web) | Visualize — Sigma.js graph viewer at `/graph` |
+
+The [`era_indexer`](../era_indexer) is the write half: it walks your files,
 transcribes/converts them, chunks, embeds via Ollama, and stores everything in
 Postgres + pgvector. This server only reads from that same database.
 
@@ -15,7 +31,7 @@ Postgres + pgvector. This server only reads from that same database.
                           ┌─────────────┴─────────────┐
                           ▼                            ▼
                   Postgres + pgvector            Ollama (embeddings)
-                  (document_chunks, …)           (bge-m3)
+                  (document_chunks, …)           (qwen3-embedding:0.6b)
 ```
 
 The server is read-only with respect to the vault: it embeds the incoming
@@ -105,10 +121,10 @@ LLM/fallback is wired.
 
 ### Where the models run (NAS ↔ Mac)
 
-era_mcp runs on the always-on NAS, but the heavy LLM does **not** — the NAS Ollama
-(~6 GB) only serves `bge-m3` embeddings (and optionally a small reranker). The
-synthesis/query-rewrite LLM runs on the **M1 Max** (`LLM_PRIMARY_BASE_URL`), with
-**OpenAI as fallback** (`OPENAI_API_KEY`).
+era_mcp runs on the always-on NAS, but the heavy LLM does **not** — the NAS
+Ollama (~6 GB) only serves `qwen3-embedding:0.6b` embeddings (and optionally a
+small reranker). The synthesis/query-rewrite LLM runs on the **M1 Max**
+(`LLM_PRIMARY_BASE_URL`), with **OpenAI as fallback** (`OPENAI_API_KEY`).
 
 **Graceful degradation** (the agent never hard-fails on LLM issues):
 
@@ -146,7 +162,7 @@ injected by Docker; locally, export them or use an `.env` file.
 | `ERA_VAULT_DB_NAME`     | `era_vault`                 | Database name |
 | `ERA_VAULT_DB_USER`     | `era`                       | Database user |
 | `OLLAMA_BASE_URL`       | `http://ollama:11434`       | Ollama endpoint for query embedding |
-| `EMBEDDING_MODEL`       | `bge-m3`          | Must match the model the indexer used |
+| `EMBEDDING_MODEL`       | `qwen3-embedding:0.6b`    | Must match the model the indexer used |
 | `DEFAULT_TOP_K`         | `20`                        | Default results when `top_k` omitted |
 | `CANDIDATE_POOL`        | `50`                        | Candidates pulled per channel before RRF (≥ `top_k`) |
 | `RRF_K`                 | `60`                        | RRF constant; higher dampens high ranks |
@@ -154,8 +170,8 @@ injected by Docker; locally, export them or use an `.env` file.
 | `RRF_FTS_WEIGHT`        | `0.5`                       | Weight of the full-text channel |
 
 > The embedding model **must** match the one used by the indexer, or query and
-> document vectors will be incomparable. Default is `bge-m3` (1024-dim),
-> matching `document_chunks.embedding vector(1024)`.
+> document vectors will be incomparable. Default is `qwen3-embedding:0.6b`
+> (1024-dim), matching `document_chunks.embedding vector(1024)`.
 
 ### Agent layer (`/ask`) variables
 
@@ -168,7 +184,7 @@ injected by Docker; locally, export them or use an `.env` file.
 | `LLM_FALLBACK_ENABLED`  | `1`                              | Use OpenAI when the Mac is unreachable |
 | `OPENAI_API_KEY`        | _(unset)_                        | Unset = fallback disabled (never required) |
 | `OPENAI_BASE_URL`       | `https://api.openai.com/v1`      | OpenAI-compatible base URL |
-| `OPENAI_MODEL`          | `gpt-4o-mini`                    | Fallback model |
+| `OPENAI_MODEL`          | `gpt-4.1-mini`                   | Fallback model |
 | `LLM_MAX_TOKENS`        | `1024`                           | Max completion tokens |
 | `LLM_TEMPERATURE`       | `0.1`                            | Sampling temperature |
 | `RERANK_ENABLED`        | `1`                              | Cross-encoder rerank of the candidate pool |
@@ -193,7 +209,7 @@ export ERA_VAULT_DB_NAME=era_vault
 export ERA_VAULT_DB_USER=era
 export ERA_VAULT_DB_PASSWORD=...        # required
 export OLLAMA_BASE_URL=http://192.168.50.50:11434
-export EMBEDDING_MODEL=bge-m3
+export EMBEDDING_MODEL=qwen3-embedding:0.6b
 
 python -m era_mcp            # or: python -m era_mcp.server
 ```

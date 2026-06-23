@@ -8,6 +8,22 @@ it via Ollama, and stores everything in PostgreSQL with pgvector.
 Everything runs on your Mac. Postgres lives on the Synology. After a one-time
 model download, the whole pipeline works offline.
 
+The Python package in this folder is `career_history` (CLI:
+`python -m career_history.cli`). See the [repo masterplan](../README.md) for how
+all four Era Vault components fit together.
+
+## Ecosystem
+
+| Component | Role |
+|-----------|------|
+| **era_indexer** (this) | Write — discover, convert, chunk, embed, graph extract |
+| [`era_mcp`](../era_mcp) | Read — hybrid search, `/ask` agent, OpenAPI tools |
+| [`era_auditor`](../era_auditor) | Steward — vault hygiene, semantic dupes, Librarian training |
+| [`era_graph_web`](../era_graph_web) | Visualize — Sigma.js graph viewer at `/graph` |
+
+Indexer populates Postgres; MCP reads it; auditor scans the same vault roots
+and optionally reads indexer embeddings; graph web displays snapshots served by MCP.
+
 ## Architecture
 
 ```
@@ -26,14 +42,15 @@ model download, the whole pipeline works offline.
        (transcribe;         (PDF/DOCX/PPTX/
         no diarize)           XLSX → MD)
                │                │
-               ▼                │
-       speaker_segments         │
-               │                │
+               ▼                ▼
+       speaker_segments    vision captions
+               │           (optional Ollama)
                └───────┬────────┘
                        ▼
-                 chunk text
+           structure-aware chunking
+           + contextual headers (v2)
                        ▼
-              Ollama embeddings (bge-m3)
+              Ollama embeddings (qwen3-embedding:0.6b)
                        ▼
               child chunks (vector(1024))
                        │
@@ -44,13 +61,16 @@ model download, the whole pipeline works offline.
 ## Prerequisites
 
 1. **Python 3.11+** on the Mac.
-2. **Ollama** installed and running on the Mac:
+2. **Ollama** installed and running on the Mac. Pull the models referenced in
+   your `config.yaml` (see [Configuration](#configuration) below). At minimum:
    ```bash
-   ollama pull bge-m3            # embeddings, 1024-dim, EN+ZH
-   ollama pull qwen3-vl:8b       # document image descriptions (vision model)
-   ollama pull qwen3.5:9b-mlx    # graph extraction + contextual blurbs
-   ollama serve   # if not already running as a daemon
+   ollama pull qwen3-embedding:0.6b   # embeddings, 1024-dim, EN+ZH, 32k context
+   ollama pull gemma4:12b-mlx         # document image descriptions (when enabled)
+   ollama pull qwen3.5:35b            # graph extraction (when v2 graph flags on)
+   ollama serve                       # if not already running as a daemon
    ```
+   Pull `qwen3-embedding:0.6b` on **both** the Mac indexer host and any NAS/Ollama
+   host used by `era_mcp` so query embeddings match indexed vectors.
 3. **PostgreSQL 14+** on the Synology with `pgvector` extension installed.
    Create a database and user:
    ```sql
@@ -61,64 +81,177 @@ model download, the whole pipeline works offline.
    CREATE EXTENSION vector;
    ```
 4. **FFmpeg** for audio decoding: `brew install ffmpeg`. No HuggingFace token
-   is required — audio transcription uses MLX Whisper and there is no
+   is required for transcription — MLX Whisper handles audio and there is no
    diarization step.
 
 ## Setup
 
 ```bash
-# Clone or copy this directory, then:
 cd era_indexer
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
 cp config.yaml.example config.yaml
-# Edit config.yaml: set connection_string, source_directories.
-# Optional: set document_images.descriptions_enabled=true to caption images
-# through the local Ollama OpenAI-compatible endpoint.
+# Edit config.yaml: source_directories, models, v2 flags, etc.
+# Database: prefer ERA_VAULT_DB_* values in .env; connection_string is fallback.
 
-# One-time setup
-python -m career_history.cli init             # apply schema.sql
-python -m career_history.cli bootstrap        # download MLX Whisper + Docling models
+python -m career_history.cli init       # apply schema.sql + pending migrations
+python -m career_history.cli bootstrap  # download MLX Whisper + Docling models
 ```
 
 After `bootstrap` succeeds you can disconnect from the network entirely if you
 want.
 
-## Pre-Reindex Foundation
+## Configuration
 
-Do not restart the full corpus reindex until these foundations are in place.
-They change the schema and retrieval behavior, so doing them after a full run
-would force another expensive re-embed.
+All knobs live in `config.yaml` (copy from `config.yaml.example`). The tables
+below mirror the current checked-in defaults.
 
-Current decisions:
+### `database`
 
-- Embeddings: `bge-m3`, `1024` dimensions. Pull it on both the Mac indexer and
-  the NAS/Ollama used by `era_mcp`.
+| Key | Value | Notes |
+|-----|-------|-------|
+| `connection_string` | Postgres URL | Fallback only. The app prefers `ERA_VAULT_DB_*` from `.env`. |
+
+### `paths.source_directories`
+
+List of vault roots on the network mount. Each directory is walked recursively.
+Add as many roots as you need.
+
+### `models`
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `embedding_model` | `qwen3-embedding:0.6b` | Multilingual (EN+ZH), 1024-dim, 32k context. |
+| `embedding_dim` | `1024` | Must match `vector(1024)` in `schema.sql`. |
+| `graph_extraction_model` | `qwen3.5:35b` | Entity/relationship JSON extraction (`graph.py`). Favors quality; switch to a smaller MLX model if pilot throughput is too slow. |
+| `whisper_model` | `large-v3-turbo` | Used only to derive the MLX repo when `whisper_mlx_repo` is unset. |
+| `whisper_mlx_repo` | `mlx-community/whisper-large-v3-mlx` | MLX Whisper runs on the Mac GPU (Metal). |
+| `whisper_language` | `null` | `null` = auto-detect per file. |
+| `allowed_languages` | `["en", "zh"]` | Only index audio in these languages. |
+| `whisper_condition_on_previous_text` | `false` | Stops repetition/hallucination loops. |
+| `whisper_compression_ratio_threshold` | `1.8` | Stricter than the 2.4 default; re-rolls stuck segments. |
+
+### `processing`
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `chunk_size` / `chunk_overlap` | `1000` / `200` | Flat (non-structured) documents and audio. |
+| `parent_chunk_size` / `parent_chunk_overlap` | `10000` / `400` | Parent context returned at retrieval time. |
+| `child_chunk_size` / `child_chunk_overlap` | `2000` / `200` | Children are embedded for precise matching. |
+| `max_retries` | `3` | Per-file retry limit before `failed`. |
+
+Sizes are in characters (~4 chars/token).
+
+### `document_images`
+
+Docling can caption images and figures via a local Ollama vision model. Captions
+are folded into the converted markdown, chunked, and embedded.
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `descriptions_enabled` | `true` | Set `false` to skip vision calls entirely. |
+| `formats` | `.pdf`, `.docx`, `.pptx`, `.xlsx` | |
+| `api_url` | `http://localhost:11434/v1/chat/completions` | Local Ollama OpenAI-compatible endpoint. |
+| `model` | `gemma4:12b-mlx` | Vision model for image descriptions. |
+| `max_completion_tokens` | `200` | Per-image caption length cap. |
+| `timeout_seconds` | `180` | |
+| `concurrency` | `3` | Parallel caption requests during first conversion. |
+| `ocr_enabled` | `false` | RapidOCR dominates runtime on digital PDFs; enable only for scans. |
+| `images_scale` | `2.0` | |
+| `generate_picture_images` | `true` | |
+
+Converted markdown is cached in `processing_artifacts`, so re-embeds skip Docling
+and vision work. Concurrency mainly helps the first conversion of each file.
+
+### `v2` rollout flags
+
+Phase 1 (structure-aware chunking, contextual headers, parent-child retrieval)
+is enabled. Later phases stay off until validated on a small folder.
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `structure_aware_chunking_enabled` | `true` | Heading-aware chunks from Docling markdown. |
+| `contextual_embeddings_enabled` | `true` | Prepends a compact context header (filename fields, folder, title, section path, chunk type) to embedded text. Built in code — see `structure._context_header`. |
+| `parent_child_retrieval_enabled` | `true` | Embed children; return linked parents for context. |
+| `hybrid_search_enabled` | `false` | |
+| `reranker_enabled` | `false` | |
+| `entity_extraction_enabled` | `false` | Knowledge graph — all three graph flags must be on for sync auto-refresh. |
+| `relationship_extraction_enabled` | `false` | |
+| `graph_retrieval_enabled` | `false` | |
+| `sync_interval_seconds` | `300` | Default interval for `sync` when `--interval` is omitted. |
+| `graph_ollama_base_url` | `http://localhost:11434` | Override for graph extraction LLM calls. |
+
+Expected `embedding_content_version` with contextual headers enabled:
+`markdown-headings-ctx-qwen3-v1`.
+
+### `v3`
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `knowledge_os_enabled` | `false` | |
+| `summaries_enabled` | `false` | |
+| `communities_enabled` | `false` | |
+| `graph_metadata_enabled` | `false` | |
+| `knowledge_retrieval_enabled` | `false` | |
+| `graph_export_enabled` | `true` | Snapshot export for `era_graph_web`. |
+| `summary_model` | `extractive-local` | |
+| `community_algorithm` | `relationship-neighborhood` | |
+
+### `extensions`
+
+- **audio:** `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.mp4`, `.mov`
+- **documents:** `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.md`, `.txt`
+
+### `huggingface.token`
+
+Used only for first-time model downloads (MLX Whisper repo). After `bootstrap`
+caches models locally you can run fully offline. Prefer the `HF_TOKEN` env var
+over storing a token in the file.
+
+## Fresh-Index Foundation
+
+For a clean rebuild, clear the Era Vault index tables, then run a small pilot
+before indexing the full corpus. This keeps the `era_vault` database, schema,
+indexes, pgvector extension, and `schema_migrations` intact while removing old
+registry rows, queue state, chunks, embeddings, graph data, and conversion cache.
+Because `processing_artifacts` is cleared too, the first full run will pay
+Docling, vision-caption, and conversion costs again.
+
+Current decisions (matching `config.yaml`):
+
+- Embeddings: `qwen3-embedding:0.6b`, `1024` dimensions, `32k` context.
 - Vector index: `HNSW` over `document_chunks.embedding vector(1024)`.
-- Chunking: parent-child retrieval is enabled. Small child chunks are embedded
-  for precise matching; larger parent chunks are returned for context.
-- Conversion: Docling markdown is cached in `processing_artifacts`, keyed by
-  file hash and conversion version, so future re-embeds skip OCR/vision work.
-- Document images: image captioning concurrency is `3`; OCR is disabled by
-  default because it dominated runtime on digital PDFs.
+- Chunking: parent-child retrieval on. Children `2000` chars; parents `10000` chars.
+- Context: structure-aware chunking + code-built contextual headers (`v2`).
+- Document images: captions on (`gemma4:12b-mlx`), concurrency `3`, OCR off.
+- Graph extraction model is configured (`qwen3.5:35b`) but v2 graph flags are off.
 
-Runbook:
+Clean-reset runbook:
 
 ```bash
-# Mac indexer host
-cd /Users/erathiachia/GitHub/Career_SecondBrain/era_indexer
-ollama pull bge-m3
-python -m career_history.cli migrate
+cd era_indexer
 
-# NAS Ollama host
-ollama pull bge-m3
+# Optional but strongly recommended: backup era_vault before clearing data.
+pg_dump -h 192.168.50.75 -p 15432 -U era -d era_vault \
+  -Fc -f ~/era_vault_backup_$(date +%Y%m%d).dump
 
-# First pilot only, not full corpus yet
-python -m career_history.cli reindex-documents --folder "14. ST-Engg" --limit 5
-python -m career_history.cli update-documents --folder "14. ST-Engg" --limit 5
-python -m career_history.cli status --folder "14. ST-Engg"
+# Destructive reset of Era Vault indexed data only.
+# Refuses to run unless current_database() is era_vault and the confirm string matches.
+python -m truncate_all_career_history --confirm TRUNCATE_ERA_VAULT_DATA
+```
+
+```bash
+ollama pull qwen3-embedding:0.6b   # Mac indexer host
+ollama pull qwen3-embedding:0.6b   # NAS Ollama host (era_mcp)
+ollama pull gemma4:12b-mlx         # if document_images.descriptions_enabled
+
+# First pilot only. With the current config, source_directories already points
+# at /Volumes/homes/Erathia/Career/13. VisionTech, so do not pass
+# --folder "13. VisionTech" or the path will be doubled.
+python -m career_history.cli update-documents --limit 10
+python -m career_history.cli status
 ```
 
 Expected pilot checks:
@@ -140,33 +273,9 @@ SELECT vector_dims(embedding), COUNT(*)
  GROUP BY vector_dims(embedding);
 ```
 
-Only after the pilot shows `markdown-headings-ctx-v1`, `1024`-dim embeddings,
-non-zero parent chunks, and linked children should you reindex the rest of the
-corpus.
-
-## Document Image Descriptions
-
-The document converter can ask a local Ollama vision model to describe images
-and figures found in PDFs and supported Office files. These descriptions are
-exported into the markdown that gets chunked and embedded, so diagrams,
-screenshots, charts, and scanned visuals become searchable text.
-
-Enable this in `config.yaml`:
-
-```yaml
-document_images:
-  descriptions_enabled: true
-  api_url: "http://localhost:11434/v1/chat/completions"
-  model: "qwen3-vl:8b"
-  max_completion_tokens: 200
-  concurrency: 3
-  ocr_enabled: false
-```
-
-For your current Mac setup, `qwen3-vl:8b` is the practical local vision-language
-model for document image descriptions. If conversion is still too slow, lower image
-captioning quality before re-enabling OCR; OCR was the main source of the
-`RapidOCR returned empty result` slowdown on digital PDFs.
+Only after the pilot shows `markdown-headings-ctx-qwen3-v1`, `1024`-dim
+embeddings, non-zero parent chunks, and linked children should you index the
+rest of the corpus.
 
 ## Daily usage
 
@@ -180,8 +289,8 @@ python -m career_history.cli update-documents
 # Update only audio/video meeting files
 python -m career_history.cli update-meetings
 
-# Update one folder
-python -m career_history.cli update --folder Meetings
+# Update one folder (name must match a path segment under source_directories)
+python -m career_history.cli update --folder "13. VisionTech"
 
 # Process up to 5 files this run (good for testing)
 python -m career_history.cli update --folder Meetings --limit 5
@@ -190,14 +299,14 @@ python -m career_history.cli update --folder Meetings --limit 5
 python -m career_history.cli update-documents --folder Research --limit 5
 python -m career_history.cli update-meetings --folder Meetings --limit 5
 
-# Reprocess already-indexed documents, then rebuild them with current settings
+# Reprocess already-indexed documents, then rebuild with current settings
 python -m career_history.cli reindex-documents
 python -m career_history.cli update-documents
 
-# Continuously sync new/changed files using the same safe update flow
+# Continuously sync new/changed files (default interval from v2.sync_interval_seconds)
 python -m career_history.cli sync --interval 300
 
-# Run one sync cycle and exit, useful for cron/system schedulers
+# Run one sync cycle and exit — useful for cron/system schedulers
 python -m career_history.cli sync --once
 
 # Just see what's pending
@@ -211,10 +320,10 @@ python -m career_history.cli retry --folder Meetings
 
 ## How "update" works
 
-`era update` is `discover` followed by `run`. It uses the default run settings
-from `era.config.run_everything()`, so it still handles both documents and
-audio/video files. `era update-documents` uses `era.config.run_documents()`;
-`era update-meetings` uses `era.config.run_meetings_audio()`.
+`python -m career_history.cli update` is `discover` followed by `run`. It uses
+the default run settings from `career_history.config`, so it still handles both
+documents and audio/video files. `update-documents` and `update-meetings` use
+their respective run profiles.
 
 1. **discover** walks every directory listed in `source_directories`, hashes
    each file, and inserts/updates rows in `file_registry`. Unchanged files
@@ -225,20 +334,22 @@ audio/video files. `era update-documents` uses `era.config.run_documents()`;
    committing state after each stage. If the process dies mid-stage, the next
    `run` picks up where it left off.
 
-`era sync` is a continuous wrapper around the same discover + run flow. It does
-not introduce a separate indexing path; each cycle still hashes files, enqueues
-only new or changed files, and resumes from `processing_queue`.
+`python -m career_history.cli sync` is a continuous wrapper around the same
+discover + run flow. It does not introduce a separate indexing path; each cycle
+still hashes files, enqueues only new or changed files, and resumes from
+`processing_queue`.
 
 Status moves through:
+
 - Audio: `pending` → `transcribing` → `chunking` → `embedding` → `done`
 - Documents: `pending` → `converting` → `chunking` → `embedding` → `done`
 - On exception: → `failed` with error message and incremented attempt count
 
 ## Schema notes
 
-- `document_chunks.embedding` is `vector(1024)` to match `bge-m3`. If you
-  change the embedding model, update the dimension in `schema.sql`, add a
-  migration, and re-embed everything.
+- `document_chunks.embedding` is `vector(1024)` to match
+  `models.embedding_model` / `models.embedding_dim`. If you change dimension,
+  update `schema.sql`, add a migration, and re-embed everything.
 - The vector index is `HNSW` with cosine distance.
 - `parent_chunks` stores larger context windows for parent-child retrieval.
   `document_chunks.parent_chunk_id` links each embedded child to its returned
@@ -252,29 +363,15 @@ Status moves through:
 - `document_chunks.metadata` is JSONB; the runner stores `{"kind": "audio",
   "speaker": "SPEAKER_00"}` for audio chunks and `{"kind": "document"}` for
   document chunks, so RAG queries can filter on these.
-- V2 schema changes are additive migrations. `era init` applies `schema.sql`
-  and then any unapplied files in `migrations/`; `era migrate` can apply only
-  pending migrations later. Rollback is explicit via `era migrate-rollback`
-  and matching `.rollback.sql` files.
+- V2 schema changes are additive migrations. `python -m career_history.cli init`
+  applies `schema.sql` and then any unapplied files in `migrations/`;
+  `migrate` can apply only pending migrations later. Rollback is explicit via
+  `migrate-rollback` and matching `.rollback.sql` files.
 - Structure-aware, contextual, and parent-child document indexing are controlled
   by `v2.structure_aware_chunking_enabled`,
   `v2.contextual_embeddings_enabled`, and
   `v2.parent_child_retrieval_enabled`. Keep the full corpus run blocked until a
   small folder has been validated.
-
-## Configuration knobs
-
-In `config.yaml`:
-
-- `models.whisper_model`: `large-v3` (best), `medium`, `small` (faster). Used
-  only to derive the MLX repo when `whisper_mlx_repo` is unset.
-- `models.whisper_mlx_repo`: explicit MLX Community repo, e.g.
-  `mlx-community/whisper-large-v3-mlx`. MLX Whisper runs on the Mac GPU (Metal).
-- `models.whisper_condition_on_previous_text`: `false` (default) stops the
-  decoder from getting stuck in repetition/hallucination loops.
-- `models.whisper_compression_ratio_threshold`: `1.8` (stricter than the 2.4
-  default) re-rolls repetitive "stuck" segments more aggressively.
-- `processing.chunk_size` / `chunk_overlap`: tune for your retrieval task.
 
 ## Troubleshooting
 
@@ -284,26 +381,34 @@ Whisper requires Apple Silicon; it will not run on Intel/x86 or inside a
 non-Apple Docker host.
 
 **`could not connect to server` from Postgres**: check that pgvector is
-installed (`CREATE EXTENSION vector;` in the database), connection string is
-right, and that the Mac can reach the Synology on port 15432.
+installed (`CREATE EXTENSION vector;` in the database), `ERA_VAULT_DB_*` or
+`database.connection_string` is correct, and that the Mac can reach the
+Synology on port 15432.
 
-**Ollama warmup failed**: run `ollama serve` and `ollama pull bge-m3`.
+**Ollama warmup failed**: run `ollama serve` and
+`ollama pull qwen3-embedding:0.6b`.
 
-**Files get marked `failed`**: run `python -c "from era import config, db;
+**Slow document conversion on digital PDFs**: keep `document_images.ocr_enabled`
+at `false`. OCR was the main source of `RapidOCR returned empty result` spam.
+If captions are still too slow, lower `concurrency` or switch to a smaller vision
+model before re-enabling OCR.
+
+**Files get marked `failed`**: run `python -c "from career_history import config, db;
 config.load(); print(db.pending_files())"` to inspect, or query
-`processing_queue.error_message` directly. After fixing, `era retry` to
-re-enqueue.
+`processing_queue.error_message` directly. After fixing,
+`python -m career_history.cli retry` to re-enqueue.
 
-## Next step: RAG + MCP
+## Related components
 
-This indexer is the "write" half. The "read" half is a separate small
-service that:
-1. Takes a query, embeds it with the same Ollama model (`bge-m3`).
-2. Runs hybrid vector + full-text retrieval over child chunks.
-3. Collapses child hits to `parent_chunks` for larger context when available.
-4. Pulls back top-K results with their `file_registry` and (for audio)
-   `speaker_segments` metadata, so attribution travels with the answer.
+This indexer is the **write** half of Era Vault. The other components read or
+visualize the same data:
 
-That service can sit behind an MCP server exposing `search_vault` and
-`indexing_status` as tools. The CLI commands here become the operator
-interface for the same data.
+- [`era_mcp`](../era_mcp) — read half: embeds queries with the same Ollama model
+  (`qwen3-embedding:0.6b`), hybrid vector + FTS retrieval, parent-chunk context,
+  and OpenAPI tools (`search_vault`, `ask_vault`, `indexing_status`).
+- [`era_auditor`](../era_auditor) — Knowledge Steward: scans the same vault
+  roots, reads indexer embeddings for semantic dupes and placement simulation.
+- [`era_graph_web`](../era_graph_web) — graph viewer at `/graph`, fed by
+  `graph-refresh` snapshots served through MCP.
+
+See the [repo masterplan](../README.md) for the full architecture.

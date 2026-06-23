@@ -153,7 +153,7 @@ function App() {
         ) : (
           <div className="empty-state">
             <h2>No graph loaded</h2>
-            <p>Run `era graph-refresh` to generate the first snapshot.</p>
+            <p>Run <code>python -m career_history.cli graph-refresh</code> from <code>era_indexer/</code> to generate the first snapshot.</p>
           </div>
         )}
       </section>

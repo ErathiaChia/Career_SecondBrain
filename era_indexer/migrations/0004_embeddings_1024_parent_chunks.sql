@@ -1,4 +1,4 @@
--- Era Vault: upgrade embeddings to bge-m3 (1024-dim) with an HNSW index, and
+-- Era Vault: upgrade embeddings to qwen3-embedding:0.6b (1024-dim) with an HNSW
 -- add parent-child ("small-to-big") retrieval.
 --
 -- WARNING: this clears existing 768-dim embeddings (they are incompatible with

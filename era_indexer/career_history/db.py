@@ -142,6 +142,80 @@ def migrate(migrations_dir: str | Path | None = None) -> list[str]:
     return applied
 
 
+_INDEX_DATA_TABLES = (
+    "community_members",
+    "graph_metadata",
+    "communities",
+    "graph_snapshots",
+    "graph_extraction_state",
+    "relationship_evidence",
+    "entity_mentions",
+    "relationships",
+    "entities",
+    "section_summaries",
+    "document_summaries",
+    "parent_chunks",
+    "document_chunks",
+    "document_sections",
+    "documents",
+    "processing_artifacts",
+    "speaker_segments",
+    "processing_queue",
+    "file_registry",
+    "known_speakers",
+)
+
+
+def truncate_index_data(
+    *,
+    confirm: str,
+    expected_database: str = "era_vault",
+) -> dict[str, Any]:
+    """Clear all indexed Era Vault data while preserving schema and migrations.
+
+    This is intentionally guarded because it is destructive. It keeps tables,
+    indexes, pgvector, and ``schema_migrations`` intact, but removes registry
+    rows, queue state, chunks, embeddings, cached conversions, graph data, and
+    speaker rows. After running this, use ``update-documents`` or ``update`` to
+    rebuild from the filesystem.
+
+    Args:
+        confirm: Must be exactly ``"TRUNCATE_ERA_VAULT_DATA"``.
+        expected_database: Refuse to run unless ``current_database()`` matches.
+
+    Returns:
+        Row counts before truncation plus the database name.
+    """
+    if confirm != "TRUNCATE_ERA_VAULT_DATA":
+        raise ValueError("Refusing to truncate index data without explicit confirmation.")
+
+    table_counts_sql = "\nUNION ALL\n".join(
+        f"SELECT '{table_name}' AS table_name, COUNT(*) AS row_count FROM {table_name}"
+        for table_name in _INDEX_DATA_TABLES
+    )
+    truncate_sql = f"""
+        TRUNCATE TABLE {", ".join(_INDEX_DATA_TABLES)}
+        RESTART IDENTITY CASCADE
+    """
+
+    with conn() as c:
+        database = c.execute(text("SELECT current_database()")).scalar_one()
+        if database != expected_database:
+            raise RuntimeError(
+                f"Refusing to truncate {database!r}; expected {expected_database!r}."
+            )
+
+        counts = c.execute(text(table_counts_sql)).fetchall()
+        before = {row.table_name: row.row_count for row in counts}
+        c.execute(text(truncate_sql))
+
+    return {
+        "database": database,
+        "tables": list(_INDEX_DATA_TABLES),
+        "rows_before": before,
+    }
+
+
 def upsert_file(
     file_path: str,
     file_name: str,
