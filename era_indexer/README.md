@@ -47,8 +47,8 @@ model download, the whole pipeline works offline.
 2. **Ollama** installed and running on the Mac:
    ```bash
    ollama pull bge-m3            # embeddings, 1024-dim, EN+ZH
-   ollama pull gemma4:12b-mlx    # document image descriptions
-   ollama pull qwen3.5:35b       # graph extraction pilot
+   ollama pull qwen3-vl:8b       # document image descriptions (vision model)
+   ollama pull qwen3.5:9b-mlx    # graph extraction + contextual blurbs
    ollama serve   # if not already running as a daemon
    ```
 3. **PostgreSQL 14+** on the Synology with `pgvector` extension installed.
@@ -79,8 +79,8 @@ cp config.yaml.example config.yaml
 # through the local Ollama OpenAI-compatible endpoint.
 
 # One-time setup
-python -m era.cli init             # apply schema.sql
-python -m era.cli bootstrap        # download MLX Whisper + Docling models
+python -m career_history.cli init             # apply schema.sql
+python -m career_history.cli bootstrap        # download MLX Whisper + Docling models
 ```
 
 After `bootstrap` succeeds you can disconnect from the network entirely if you
@@ -110,15 +110,15 @@ Runbook:
 # Mac indexer host
 cd /Users/erathiachia/GitHub/Career_SecondBrain/era_indexer
 ollama pull bge-m3
-python -m era.cli migrate
+python -m career_history.cli migrate
 
 # NAS Ollama host
 ollama pull bge-m3
 
 # First pilot only, not full corpus yet
-python -m era.cli reindex-documents --folder "14. ST-Engg" --limit 5
-python -m era.cli update-documents --folder "14. ST-Engg" --limit 5
-python -m era.cli status --folder "14. ST-Engg"
+python -m career_history.cli reindex-documents --folder "14. ST-Engg" --limit 5
+python -m career_history.cli update-documents --folder "14. ST-Engg" --limit 5
+python -m career_history.cli status --folder "14. ST-Engg"
 ```
 
 Expected pilot checks:
@@ -157,14 +157,14 @@ Enable this in `config.yaml`:
 document_images:
   descriptions_enabled: true
   api_url: "http://localhost:11434/v1/chat/completions"
-  model: "gemma4:12b-mlx"
+  model: "qwen3-vl:8b"
   max_completion_tokens: 200
   concurrency: 3
   ocr_enabled: false
 ```
 
-For your current Mac setup, `gemma4:12b-mlx` is the practical local option for
-document image descriptions. If conversion is still too slow, lower image
+For your current Mac setup, `qwen3-vl:8b` is the practical local vision-language
+model for document image descriptions. If conversion is still too slow, lower image
 captioning quality before re-enabling OCR; OCR was the main source of the
 `RapidOCR returned empty result` slowdown on digital PDFs.
 
@@ -172,41 +172,41 @@ captioning quality before re-enabling OCR; OCR was the main source of the
 
 ```bash
 # Update everything (discover + process all changed files)
-python -m era.cli update
+python -m career_history.cli update
 
 # Update only documents
-python -m era.cli update-documents
+python -m career_history.cli update-documents
 
 # Update only audio/video meeting files
-python -m era.cli update-meetings
+python -m career_history.cli update-meetings
 
 # Update one folder
-python -m era.cli update --folder Meetings
+python -m career_history.cli update --folder Meetings
 
 # Process up to 5 files this run (good for testing)
-python -m era.cli update --folder Meetings --limit 5
+python -m career_history.cli update --folder Meetings --limit 5
 
 # Split runs also support folder + limit
-python -m era.cli update-documents --folder Research --limit 5
-python -m era.cli update-meetings --folder Meetings --limit 5
+python -m career_history.cli update-documents --folder Research --limit 5
+python -m career_history.cli update-meetings --folder Meetings --limit 5
 
 # Reprocess already-indexed documents, then rebuild them with current settings
-python -m era.cli reindex-documents
-python -m era.cli update-documents
+python -m career_history.cli reindex-documents
+python -m career_history.cli update-documents
 
 # Continuously sync new/changed files using the same safe update flow
-python -m era.cli sync --interval 300
+python -m career_history.cli sync --interval 300
 
 # Run one sync cycle and exit, useful for cron/system schedulers
-python -m era.cli sync --once
+python -m career_history.cli sync --once
 
 # Just see what's pending
-python -m era.cli status
-python -m era.cli status --folder Meetings
+python -m career_history.cli status
+python -m career_history.cli status --folder Meetings
 
 # Retry failed items
-python -m era.cli retry
-python -m era.cli retry --folder Meetings
+python -m career_history.cli retry
+python -m career_history.cli retry --folder Meetings
 ```
 
 ## How "update" works
@@ -285,7 +285,7 @@ non-Apple Docker host.
 
 **`could not connect to server` from Postgres**: check that pgvector is
 installed (`CREATE EXTENSION vector;` in the database), connection string is
-right, and that the Mac can reach the Synology on port 5432.
+right, and that the Mac can reach the Synology on port 15432.
 
 **Ollama warmup failed**: run `ollama serve` and `ollama pull bge-m3`.
 

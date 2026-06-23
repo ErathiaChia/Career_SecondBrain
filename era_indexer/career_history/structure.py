@@ -5,20 +5,26 @@ exports documents that way, and plain markdown/text files can share the path.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from era import config, filename as filename_parser
+from career_history import config, filename as filename_parser
 
 
 STRUCTURE_VERSION = "markdown-headings-v1"
 # Bumped when contextual (filename-aware) embedding text is produced so
 # re-embedded chunks are distinguishable from raw-body-only chunks.
 EMBEDDING_CONTENT_VERSION = "markdown-headings-ctx-v1"
+# Used when an LLM situating blurb (Anthropic-style Contextual Retrieval) is also
+# folded into the embedded text — a distinct version forces a clean re-embed.
+EMBEDDING_CONTENT_VERSION_BLURB = "markdown-headings-ctx-blurb-v1"
 
 # Field label, metadata key. Order controls how the context header reads.
 _HEADER_FIELDS = [
@@ -74,6 +80,9 @@ def build_document_chunks(
 
     contextual_enabled = config.v2_enabled("contextual_embeddings_enabled")
     parent_child_enabled = config.v2_enabled("parent_child_retrieval_enabled")
+    # LLM situating blurb only makes sense when contextual embeddings are on
+    # (the blurb is folded into the contextual embedding text).
+    blurb_enabled = contextual_enabled and config.v2_enabled("contextual_llm_blurb_enabled")
     child_splitter = _child_splitter() if parent_child_enabled else _splitter()
     parent_splitter = _parent_splitter() if parent_child_enabled else None
 
@@ -81,7 +90,12 @@ def build_document_chunks(
     parents: list[dict[str, Any]] = []
     parent_seq = 0
 
-    def _make_child(raw_chunk: str, section: _Section, parent_local_id: int | None) -> None:
+    def _make_child(
+        raw_chunk: str,
+        section: _Section,
+        parent_local_id: int | None,
+        context_text: str = "",
+    ) -> None:
         chunk_type = _chunk_type(raw_chunk)
         metadata = {
             "kind": "document",
@@ -97,17 +111,21 @@ def build_document_chunks(
             "structure_version": STRUCTURE_VERSION,
             **_file_field_metadata(file_fields),
         }
-        contextual = contextualize(raw_chunk, metadata)
+        blurb = _situating_blurb(raw_chunk, context_text, metadata) if blurb_enabled else ""
+        if blurb:
+            metadata["llm_context"] = blurb
+        contextual = contextualize(raw_chunk, metadata, blurb=blurb)
         chunks.append({
             "content": raw_chunk,
             "content_raw": raw_chunk,
             "content_contextual": contextual,
             "embedding_content": contextual if contextual_enabled else raw_chunk,
             "embedding_content_version": (
-                EMBEDDING_CONTENT_VERSION if contextual_enabled
+                EMBEDDING_CONTENT_VERSION_BLURB if (contextual_enabled and blurb)
+                else EMBEDDING_CONTENT_VERSION if contextual_enabled
                 else STRUCTURE_VERSION
             ),
-            "search_text": _keyword_text(raw_chunk, metadata),
+            "search_text": _keyword_text(raw_chunk, metadata, blurb=blurb),
             "chunk_type": chunk_type,
             "section_local_id": section.local_id,
             "parent_local_id": parent_local_id,
@@ -136,10 +154,10 @@ def build_document_chunks(
                     },
                 })
                 for raw_chunk in child_splitter.split_text(parent_text):
-                    _make_child(raw_chunk, section, parent_local_id)
+                    _make_child(raw_chunk, section, parent_local_id, context_text=parent_text)
         else:
             for raw_chunk in child_splitter.split_text(body):
-                _make_child(raw_chunk, section, None)
+                _make_child(raw_chunk, section, None, context_text=body)
 
     return {
         "document": {
@@ -158,19 +176,26 @@ def build_document_chunks(
     }
 
 
-def contextualize(raw_chunk: str, metadata: dict[str, Any]) -> str:
+def contextualize(raw_chunk: str, metadata: dict[str, Any], blurb: str = "") -> str:
     """Return contextual text used for optional contextual embeddings.
 
     Prepends a compact, labeled context header (filename-derived fields,
     folder, document title, section path, chunk type) to the raw chunk so the
-    embedding carries document identity, not just the body text. Empty fields
-    are omitted to keep the header short and avoid diluting the embedding.
+    embedding carries document identity, not just the body text. When ``blurb``
+    is provided (an LLM situating sentence, Anthropic-style Contextual
+    Retrieval), it is prepended ahead of the header. Empty fields are omitted to
+    keep the prefix short and avoid diluting the embedding.
     """
-    header = _context_header(metadata)
     body = raw_chunk.strip()
-    if not header:
+    prefix_parts: list[str] = []
+    if blurb:
+        prefix_parts.append(f"Context: {blurb}")
+    header = _context_header(metadata)
+    if header:
+        prefix_parts.append(header)
+    if not prefix_parts:
         return body
-    return f"{header}\n\nContent:\n{body}"
+    return f"{chr(10).join(prefix_parts)}\n\nContent:\n{body}"
 
 
 def _context_header(metadata: dict[str, Any]) -> str:
@@ -182,14 +207,95 @@ def _context_header(metadata: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _keyword_text(raw_chunk: str, metadata: dict[str, Any]) -> str:
+_BLURB_PROMPT = """You are indexing a personal knowledge base. Write a SHORT \
+context (1-2 sentences, at most 40 words) that situates the chunk below within \
+its document, so the chunk can be understood and retrieved on its own.
+
+Document: {doc_title}
+Section: {section}
+
+Surrounding context:
+{context}
+
+Chunk:
+{chunk}
+
+Rules:
+- State what the chunk is about and how it relates to the document/section.
+- Use concrete names (client, product, project, people) when they appear.
+- Do NOT introduce facts not present in the text. Do NOT repeat the chunk.
+- Output ONLY the context sentence(s), with no preamble or labels."""
+
+
+def _blurb_llm_settings() -> tuple[str, str]:
+    """Resolve (model, base_url) for the situating-blurb LLM.
+
+    Mirrors graph._extract_with_ollama so both run on the same Mac Ollama by
+    default; a dedicated ``models.contextual_blurb_model`` overrides the graph
+    model when set.
+    """
+    cfg = config.get()
+    model = (
+        os.environ.get("ERA_CONTEXTUAL_BLURB_MODEL")
+        or cfg.get("models", {}).get("contextual_blurb_model")
+        or cfg.get("models", {}).get("graph_extraction_model")
+        or "qwen3.5:9b-mlx"
+    )
+    base_url = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or config.v2().get("graph_ollama_base_url")
+        or "http://localhost:11434"
+    ).rstrip("/")
+    return model, base_url
+
+
+def _situating_blurb(raw_chunk: str, context_text: str, metadata: dict[str, Any]) -> str:
+    """Return a 1-2 sentence LLM blurb situating the chunk within its document.
+
+    Anthropic-style Contextual Retrieval: the blurb is prepended to the embedded
+    (and keyword-indexed) text so each chunk carries where-it-sits context. Best
+    effort — returns "" on any LLM/transport failure so embedding still proceeds.
+    """
+    if not raw_chunk.strip():
+        return ""
+    model, base_url = _blurb_llm_settings()
+    prompt = _BLURB_PROMPT.format(
+        doc_title=metadata.get("document_title") or metadata.get("file_name") or "",
+        section=metadata.get("section_path") or "",
+        context=(context_text or "")[:4000],
+        chunk=raw_chunk[:2000],
+    )
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0},
+    }
+    req = urllib.request.Request(
+        f"{base_url}/api/generate",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return ""
+    return (body.get("response") or "").strip()
+
+
+def _keyword_text(raw_chunk: str, metadata: dict[str, Any], blurb: str = "") -> str:
     """Build the FTS source text: filename-derived terms + raw body.
 
     Folding filename fields into the keyword channel lets lexical queries match
     on client, product, doc type, version, etc. even when those terms never
-    appear in the chunk body.
+    appear in the chunk body. When present, the LLM situating ``blurb`` is also
+    folded in so the lexical channel benefits from the same added context.
     """
     parts: list[str] = []
+    if blurb:
+        parts.append(blurb)
     for key in (
         "clean_name", "client", "product", "topic", "doc_type",
         "version", "doc_ids", "document_title", "section_path", "folder",
