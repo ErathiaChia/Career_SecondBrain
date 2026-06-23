@@ -70,3 +70,94 @@ def rrf_fts_weight() -> float:
     vector weight to stop generic keyword matches from dominating
     natural-language queries."""
     return float(os.environ.get("RRF_FTS_WEIGHT", "0.5"))
+
+
+def _flag(var: str, default: bool) -> bool:
+    raw = os.environ.get(var, "1" if default else "0").strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
+
+
+# --- LLM provider (Mac M1 Max primary, OpenAI fallback) ---
+# The synthesis/query-rewrite LLM runs on the Mac (Ollama or an OpenAI-compatible
+# MLX server). era_mcp runs on the NAS and reaches the Mac over the LAN. OpenAI is
+# only used as a fallback when the Mac is unreachable AND a key is configured.
+
+def llm_primary_base_url() -> str:
+    return os.environ.get("LLM_PRIMARY_BASE_URL", "http://host.docker.internal:11434").rstrip("/")
+
+
+def llm_primary_kind() -> str:
+    """'ollama' (Ollama /api/chat) or 'openai_compat' (/v1/chat/completions,
+    e.g. mlx_lm.server / llama.cpp)."""
+    return os.environ.get("LLM_PRIMARY_KIND", "ollama").strip().lower()
+
+
+def llm_primary_model() -> str:
+    return os.environ.get("LLM_PRIMARY_MODEL", "qwen3.5:9b-mlx")
+
+
+def llm_primary_timeout() -> float:
+    return float(os.environ.get("LLM_PRIMARY_TIMEOUT", "30"))
+
+
+def llm_fallback_enabled() -> bool:
+    return _flag("LLM_FALLBACK_ENABLED", True)
+
+
+def openai_api_key() -> str:
+    # Plain get (never required): unset means the OpenAI fallback is disabled.
+    return os.environ.get("OPENAI_API_KEY", "").strip()
+
+
+def openai_base_url() -> str:
+    return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
+
+def openai_model() -> str:
+    return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def llm_max_tokens() -> int:
+    return int(os.environ.get("LLM_MAX_TOKENS", "1024"))
+
+
+def llm_temperature() -> float:
+    return float(os.environ.get("LLM_TEMPERATURE", "0.1"))
+
+
+# --- Reranker (cross-encoder over the fused candidate pool) ---
+
+def rerank_enabled() -> bool:
+    return _flag("RERANK_ENABLED", True)
+
+
+def rerank_kind() -> str:
+    """'infinity' (Infinity/TEI /rerank server), 'llm_score' (LLM-batched
+    scoring, no extra server), or 'none'."""
+    return os.environ.get("RERANK_KIND", "llm_score").strip().lower()
+
+
+def rerank_base_url() -> str:
+    return os.environ.get("RERANK_BASE_URL", "http://host.docker.internal:7997").rstrip("/")
+
+
+def rerank_model() -> str:
+    return os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+
+
+def rerank_timeout() -> float:
+    return float(os.environ.get("RERANK_TIMEOUT", "15"))
+
+
+# --- Query understanding ---
+
+def query_rewrite_enabled() -> bool:
+    return _flag("QUERY_REWRITE_ENABLED", True)
+
+
+def hyde_enabled() -> bool:
+    return _flag("HYDE_ENABLED", False)
+
+
+def query_rewrite_timeout() -> float:
+    return float(os.environ.get("QUERY_REWRITE_TIMEOUT", "12"))

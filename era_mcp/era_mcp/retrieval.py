@@ -55,45 +55,40 @@ async def embed_query(text_input: str) -> list[float]:
     return data["embeddings"][0]
 
 
-def search(
+def _use_parent() -> bool:
+    """Whether to collapse matched children to parent chunks ("small-to-big")."""
+    return config.parent_context_enabled() and _parent_chunks_available()
+
+
+def _fused_candidates(
     query: str,
     query_embedding: list[float],
-    top_k: int | None = None,
-    folder: str | None = None,
-    kind: str | None = None,
-    context_window: int = 3,
+    folder: str | None,
+    kind: str | None,
+    cand: int,
+    limit: int,
+    use_parent: bool,
 ) -> list[dict[str, Any]]:
-    """Hybrid search over document_chunks: dense vector + lexical full-text,
-    fused with Reciprocal Rank Fusion (RRF).
+    """Fetch the RRF-fused candidate pool (dense vector + lexical full-text).
 
-    Two candidate channels are pulled independently -- the top
-    ``candidate_pool`` chunks by cosine similarity and the top
-    ``candidate_pool`` chunks by full-text ``ts_rank`` (using the same
-    ``'simple'`` config the index was built with) -- then merged by RRF
-    score ``sum(1 / (rrf_k + rank))``. Pure-vector hits (e.g. legacy chunks
-    with no ``search_vector``, or queries with no lexical match) still surface
-    through the vector channel.
-
-    Returns a list of result dicts with content, metadata, file info, cosine
-    ``similarity`` (None for FTS-only hits), ``rrf_score``, and optional
-    speaker attribution. When ``context_window`` > 0, surrounding chunks from
-    the same file are merged in so the LLM gets broader context.
+    Two channels are pulled independently -- the top ``cand`` chunks by cosine
+    similarity and the top ``cand`` by full-text ``ts_rank`` (same ``'simple'``
+    config the index was built with) -- then merged by RRF score
+    ``sum(1 / (rrf_k + rank))`` and returned (up to ``limit``) ordered by that
+    score, WITHOUT parent/neighbor expansion. Shared by the sync ``search`` path
+    and the async rerank path (``search_async``).
     """
-    if top_k is None:
-        top_k = config.default_top_k()
-
     vec = _vec_literal(query_embedding)
-    cand = max(config.candidate_pool(), top_k)
 
     conditions = []
     params: dict[str, Any] = {
         "qvec": vec,
         "qtext": query or "",
-        "top_k": top_k,
         "cand": cand,
         "rrf_k": config.rrf_k(),
         "w_vec": config.rrf_vector_weight(),
         "w_fts": config.rrf_fts_weight(),
+        "final_limit": limit,
     }
 
     if folder:
@@ -105,11 +100,6 @@ def search(
 
     where = (" AND ".join(conditions)) if conditions else "TRUE"
 
-    use_parent = config.parent_context_enabled() and _parent_chunks_available()
-    # When collapsing children to parents, pull a deeper pool so the final list
-    # still contains ~top_k distinct parents after de-duplication.
-    final_limit = min(cand, top_k * 3) if use_parent else top_k
-    params["final_limit"] = final_limit
     parent_select = (
         "pc.content AS parent_content, dc.parent_chunk_id AS parent_chunk_id"
         if use_parent else
@@ -186,49 +176,124 @@ def search(
     with engine.connect() as conn:
         rows = conn.execute(sql, params).fetchall()
 
-        hits = []
-        for row in rows:
-            entry: dict[str, Any] = {
-                "content": row[0],
-                "file_id": row[2],
-                "chunk_index": row[3],
-                "file_name": row[4],
-                "file_path": row[5],
-                "folder": row[6],
-                "is_audio": row[7],
-                "similarity": round(float(row[8]), 4) if row[8] is not None else None,
-                "rrf_score": round(float(row[12]), 6),
-                "metadata": row[1],
-                "parent_content": row[13],
-                "parent_chunk_id": row[14],
-            }
-            if row[9] is not None:
-                entry["speaker"] = row[9]
-                entry["start_time"] = float(row[10])
-                entry["end_time"] = float(row[11])
-            hits.append(entry)
+    hits = []
+    for row in rows:
+        entry: dict[str, Any] = {
+            "content": row[0],
+            "file_id": row[2],
+            "chunk_index": row[3],
+            "file_name": row[4],
+            "file_path": row[5],
+            "folder": row[6],
+            "is_audio": row[7],
+            "similarity": round(float(row[8]), 4) if row[8] is not None else None,
+            "rrf_score": round(float(row[12]), 6),
+            "metadata": row[1],
+            "parent_content": row[13],
+            "parent_chunk_id": row[14],
+        }
+        if row[9] is not None:
+            entry["speaker"] = row[9]
+            entry["start_time"] = float(row[10])
+            entry["end_time"] = float(row[11])
+        hits.append(entry)
+    return hits
 
-        if not hits:
-            return []
 
-        # Parent-child ("small-to-big"): return the larger parent chunk as
-        # context, de-duplicated so each parent appears once even when several
-        # of its children matched. Children without a parent (audio, flat docs)
-        # fall back to chunk-level neighbor-window expansion.
+def _expand_winners(
+    hits: list[dict[str, Any]],
+    top_k: int,
+    context_window: int,
+    use_parent: bool,
+) -> list[dict[str, Any]]:
+    """Expand the chosen candidates to full context.
+
+    Parent-child ("small-to-big"): return the larger parent chunk, de-duplicated
+    so each parent appears once even when several of its children matched.
+    Children without a parent (audio, flat docs) fall back to chunk-level
+    neighbor-window expansion.
+    """
+    if not hits:
+        return []
+    engine = _get_engine()
+    with engine.connect() as conn:
         if use_parent:
             return _collapse_to_parents(hits, top_k, context_window, conn)
-
         if context_window <= 0:
-            results = []
-            for hit in hits[:top_k]:
-                results.append(_chunk_result(hit, hit["content"], hit["chunk_index"], None))
-            return results
-
+            return [
+                _chunk_result(hit, hit["content"], hit["chunk_index"], None)
+                for hit in hits[:top_k]
+            ]
         results = []
         for hit in hits[:top_k]:
             merged, rng = _neighbor_window(conn, hit, context_window)
             results.append(_chunk_result(hit, merged, hit["chunk_index"], rng))
         return results
+
+
+def search(
+    query: str,
+    query_embedding: list[float],
+    top_k: int | None = None,
+    folder: str | None = None,
+    kind: str | None = None,
+    context_window: int = 3,
+) -> list[dict[str, Any]]:
+    """Hybrid search over document_chunks (dense vector + lexical full-text,
+    fused with RRF), then parent/neighbor expansion.
+
+    Returns result dicts with content, metadata, file info, cosine ``similarity``
+    (None for FTS-only hits), ``rrf_score``, and optional speaker attribution.
+    Unchanged public behavior — backs the existing /search and /knowledge/search.
+    """
+    if top_k is None:
+        top_k = config.default_top_k()
+    cand = max(config.candidate_pool(), top_k)
+    use_parent = _use_parent()
+    # When collapsing children to parents, pull a deeper pool so the final list
+    # still contains ~top_k distinct parents after de-duplication.
+    limit = min(cand, top_k * 3) if use_parent else top_k
+    hits = _fused_candidates(query, query_embedding, folder, kind, cand, limit, use_parent)
+    return _expand_winners(hits, top_k, context_window, use_parent)
+
+
+async def search_async(
+    query: str,
+    query_embedding: list[float],
+    top_k: int | None = None,
+    folder: str | None = None,
+    kind: str | None = None,
+    context_window: int = 3,
+    rerank_enabled: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Hybrid search + cross-encoder rerank (async). Used by /ask.
+
+    Pulls the full fused candidate pool, reranks it on the precise child text
+    (best-effort: identity order on failure), then expands the winners to parents
+    / neighbor windows. Sync DB work runs in a threadpool so the event loop is
+    never blocked.
+    """
+    from fastapi.concurrency import run_in_threadpool
+
+    from era_mcp import rerank as rerank_mod
+
+    if top_k is None:
+        top_k = config.default_top_k()
+    cand = max(config.candidate_pool(), top_k)
+    use_parent = _use_parent()
+    # Pull the whole pool so the reranker scores everything before truncation.
+    hits = await run_in_threadpool(
+        _fused_candidates, query, query_embedding, folder, kind, cand, cand, use_parent
+    )
+    if not hits:
+        return []
+    if rerank_enabled is None:
+        rerank_enabled = config.rerank_enabled()
+    if rerank_enabled:
+        hits = await rerank_mod.rerank(query, hits, top_k=len(hits))
+    return await run_in_threadpool(
+        _expand_winners, hits, top_k, context_window, use_parent
+    )
 
 
 def _chunk_result(
@@ -247,6 +312,8 @@ def _chunk_result(
         "rrf_score": hit["rrf_score"],
         "metadata": hit["metadata"],
     }
+    if "rerank_score" in hit:
+        result["rerank_score"] = hit["rerank_score"]
     if matched_index is not None:
         result["matched_chunk_index"] = matched_index
     if context_range is not None:
@@ -462,6 +529,54 @@ def search_relationships(query: str, limit: int = 10) -> list[dict[str, Any]]:
     return [dict(row._mapping) for row in rows]
 
 
+def entities_in_text(q: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Entities whose canonical name appears IN the given text.
+
+    For natural-language questions, ``search_entities`` (which matches when the
+    entity NAME contains the query) never fires. This reverse match — entity name
+    contained in the question — is what powers /ask graph augmentation. The
+    length guard avoids noise from very short names.
+    """
+    sql = text("""
+        SELECT e.id, e.canonical_name, e.entity_type, e.aliases, e.metadata,
+               COUNT(DISTINCT em.file_id) AS file_count
+          FROM entities e
+          LEFT JOIN entity_mentions em ON em.entity_id = e.id
+         WHERE length(e.canonical_name) >= 3
+           AND :q ILIKE '%' || e.canonical_name || '%'
+         GROUP BY e.id, e.canonical_name, e.entity_type, e.aliases, e.metadata
+         ORDER BY file_count DESC, length(e.canonical_name) DESC
+         LIMIT :limit
+    """)
+    with _get_engine().connect() as conn:
+        rows = conn.execute(sql, {"q": q, "limit": limit}).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def relationships_in_text(q: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Relationships whose source or target entity name appears IN the text.
+    The NL-question counterpart of ``search_relationships``."""
+    sql = text("""
+        SELECT r.id,
+               se.canonical_name AS source,
+               se.entity_type AS source_type,
+               r.relationship_type,
+               te.canonical_name AS target,
+               te.entity_type AS target_type,
+               r.confidence
+          FROM relationships r
+          JOIN entities se ON se.id = r.source_entity_id
+          JOIN entities te ON te.id = r.target_entity_id
+         WHERE (length(se.canonical_name) >= 3 AND :q ILIKE '%' || se.canonical_name || '%')
+            OR (length(te.canonical_name) >= 3 AND :q ILIKE '%' || te.canonical_name || '%')
+         ORDER BY r.confidence DESC NULLS LAST
+         LIMIT :limit
+    """)
+    with _get_engine().connect() as conn:
+        rows = conn.execute(sql, {"q": q, "limit": limit}).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
 def search_communities(query: str, limit: int = 10) -> list[dict[str, Any]]:
     """Search community summaries and members.
 
@@ -626,6 +741,19 @@ def _safe(fn, default):
         return default
 
 
+def graph_only(query: str, top_k: int | None = None) -> dict[str, Any]:
+    """Graph channels (entities, relationships, communities) without re-running
+    chunk retrieval. Each degrades to [] if its table is absent. Used by /ask to
+    augment already-reranked chunks with connect-the-dots context."""
+    if top_k is None:
+        top_k = config.default_top_k()
+    return {
+        "entities": _safe(lambda: entities_in_text(query, limit=top_k), []),
+        "relationships": _safe(lambda: relationships_in_text(query, limit=top_k), []),
+        "communities": _safe(lambda: search_communities(query, limit=top_k), []),
+    }
+
+
 def knowledge_search(
     query: str,
     query_embedding: list[float],
@@ -647,8 +775,10 @@ def knowledge_search(
         folder=folder,
         context_window=2,
     )
-    entities = _safe(lambda: search_entities(query, limit=top_k), [])
-    relationships = _safe(lambda: search_relationships(query, limit=top_k), [])
+    # Reverse-contains match so entities/relationships surface for natural-
+    # language questions, not only when the query equals an entity name.
+    entities = _safe(lambda: entities_in_text(query, limit=top_k), [])
+    relationships = _safe(lambda: relationships_in_text(query, limit=top_k), [])
     communities = _safe(lambda: search_communities(query, limit=top_k), [])
     summaries = []
     for hit in chunks[:top_k]:

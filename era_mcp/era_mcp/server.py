@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from era_mcp import config, retrieval
+from era_mcp import config, llm, query_understanding, retrieval
 
 app = FastAPI(
     title="Era Vault",
@@ -87,6 +87,130 @@ async def search_vault_v3(req: KnowledgeSearchRequest) -> dict:
         top_k=req.top_k,
         folder=req.folder,
     )
+
+
+class AskRequest(BaseModel):
+    query: str = Field(description="Natural-language question to answer.")
+    top_k: int = Field(default=_DEFAULT_TOP_K, description="Chunks to retrieve and cite.")
+    folder: Optional[str] = Field(default=None, description="Restrict to a folder.")
+    use_graph: bool = Field(default=True, description="Augment with graph entities/relationships.")
+    rewrite: bool = Field(default=True, description="LLM query rewriting before retrieval.")
+    rerank: bool = Field(default=True, description="Cross-encoder rerank of candidates.")
+    synthesize: bool = Field(
+        default=True,
+        description="Return an LLM-synthesized answer. False = reranked chunks only.",
+    )
+
+
+_SYNTH_SYSTEM = (
+    "You are a precise assistant answering from a personal knowledge base. Use "
+    "ONLY the numbered sources to answer. Cite sources inline as [n] immediately "
+    "after the claim they support. If the sources do not contain the answer, say "
+    "so plainly rather than guessing. Be concise and concrete — prefer names, "
+    "dates, and specifics over generalities."
+)
+
+
+async def _synthesize(question: str, chunks: list[dict], graph: Optional[dict]) -> str:
+    blocks = []
+    for i, c in enumerate(chunks, start=1):
+        content = (c.get("content") or "").strip()[:1500]
+        blocks.append(
+            f"[{i}] {c.get('file_name', '?')} (folder: {c.get('folder', '?')}):\n{content}"
+        )
+    context = "\n\n".join(blocks)
+    graph_note = ""
+    if graph and graph.get("entities"):
+        ents = ", ".join(
+            e.get("canonical_name", "")
+            for e in graph["entities"][:10]
+            if e.get("canonical_name")
+        )
+        if ents:
+            graph_note = f"\n\nRelated entities in the knowledge graph: {ents}"
+    user = f"Question: {question}\n\nSources:\n{context}{graph_note}"
+    return await llm.chat(
+        [{"role": "system", "content": _SYNTH_SYSTEM},
+         {"role": "user", "content": user}]
+    )
+
+
+@app.post("/ask", operation_id="ask_vault")
+async def ask_vault(req: AskRequest) -> dict:
+    """Answer a question over the vault, end to end.
+
+    Pipeline: query rewrite -> hybrid retrieve -> rerank -> optional graph
+    augmentation -> synthesized answer with [n] citations. Always returns the
+    supporting chunks; if the Mac LLM (and OpenAI fallback) are unavailable it
+    degrades to returning reranked chunks with ``answer=null`` and
+    ``degraded=true`` instead of failing.
+    """
+    from fastapi.concurrency import run_in_threadpool
+
+    degraded = False
+    degraded_reason: Optional[str] = None
+
+    # 1) Query understanding (degrade-safe: identity rewrite on any failure).
+    understanding = (
+        await query_understanding.rewrite_query(req.query)
+        if req.rewrite else query_understanding.identity(req.query)
+    )
+    search_query = understanding["search_query"]
+    embed_text = understanding.get("hyde_doc") or search_query
+
+    # 2) Embed + hybrid retrieve + rerank.
+    embedding = await retrieval.embed_query(embed_text)
+    chunks = await retrieval.search_async(
+        query=search_query,
+        query_embedding=embedding,
+        top_k=req.top_k,
+        folder=req.folder,
+        rerank_enabled=req.rerank,
+    )
+
+    # 3) Optional graph augmentation (best-effort; empty if not yet populated).
+    graph = None
+    if req.use_graph:
+        graph = await run_in_threadpool(retrieval.graph_only, search_query, req.top_k)
+
+    # 4) Citations mirror the supporting chunks 1:1.
+    citations = [
+        {
+            "n": i,
+            "file_name": c.get("file_name"),
+            "file_path": c.get("file_path"),
+            "folder": c.get("folder"),
+            "matched_chunk_index": c.get("matched_chunk_index"),
+            "similarity": c.get("similarity"),
+            "rerank_score": c.get("rerank_score"),
+        }
+        for i, c in enumerate(chunks, start=1)
+    ]
+
+    # 5) Synthesis — degrade to chunks-only if the LLM is unavailable.
+    answer = None
+    if req.synthesize and chunks:
+        try:
+            answer = await _synthesize(req.query, chunks, graph)
+        except llm.LLMUnavailable as e:
+            degraded = True
+            degraded_reason = f"llm_unavailable: {e}"
+    elif req.synthesize and not chunks:
+        degraded = True
+        degraded_reason = "no_results"
+
+    return {
+        "query": req.query,
+        "rewritten_query": search_query if search_query != req.query else None,
+        "sub_queries": understanding.get("sub_queries", []),
+        "answer": answer,
+        "citations": citations,
+        "chunks": chunks,
+        "graph": graph,
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
+        "provider": llm.provider_status(),
+    }
 
 
 @app.get("/entities/search", operation_id="search_entities")

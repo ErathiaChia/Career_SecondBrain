@@ -22,5 +22,26 @@ services:
       # Must match the indexer's embedding model + the vector(1024) schema.
       # Pull it on the NAS Ollama first: `ollama pull bge-m3`.
       EMBEDDING_MODEL: bge-m3
+
+      # ---- Agent layer (/ask): query rewrite + rerank + answer synthesis ----
+      # The heavy LLM runs on the M1 Max (the 6 GB NAS Ollama can't host it).
+      # Set 192.168.50.60 to your Mac's LAN IP. Keep the Mac awake (caffeinate)
+      # for warm latency; when it's unreachable /ask degrades to reranked chunks.
+      LLM_PRIMARY_BASE_URL: http://192.168.50.60:11434
+      LLM_PRIMARY_KIND: ollama            # or "openai_compat" for mlx_lm.server
+      LLM_PRIMARY_MODEL: qwen3.5:9b-mlx
+      LLM_PRIMARY_TIMEOUT: "30"
+      LLM_FALLBACK_ENABLED: "1"           # OpenAI fallback (needs OPENAI_API_KEY in ../.env)
+      # OPENAI_API_KEY / OPENAI_MODEL are read from ../.env
+
+      # Reranker — Ollama has no rerank endpoint. Default "llm_score" reuses the
+      # Mac LLM (no extra server). For best quality run Infinity/TEI on the Mac
+      # and switch to "infinity" + RERANK_BASE_URL: http://192.168.50.60:7997
+      RERANK_ENABLED: "1"
+      RERANK_KIND: llm_score
+      RERANK_MODEL: BAAI/bge-reranker-v2-m3
+
+      QUERY_REWRITE_ENABLED: "1"
+      HYDE_ENABLED: "0"
     ports:
       - "8808:8808"
