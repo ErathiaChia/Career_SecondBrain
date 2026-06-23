@@ -13,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 from rich.console import Console
 
-from era import config
+from career_history import config
 
 
 console = Console()

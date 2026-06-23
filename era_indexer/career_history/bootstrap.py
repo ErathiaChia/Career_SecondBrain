@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from era import config
-from era import transcribe
+from career_history import config
+from career_history import transcribe
 
 
 console = Console()

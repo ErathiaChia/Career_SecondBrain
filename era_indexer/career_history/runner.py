@@ -5,7 +5,7 @@ State transitions:
     Document: pending → converting   → chunking → embedding → done
     Any:      → failed (with error_message + attempt_count++)
 
-If the process dies mid-stage, the next `era run` finds the item still in a
+If the process dies mid-stage, the next `career_history.cli run` finds the item still in a
 non-terminal state and re-processes it from scratch. Re-processing is safe:
 both `replace_chunks` and `replace_segments` wipe prior rows first.
 """
@@ -25,7 +25,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from era import config, convert, db, embed, filename, structure, transcribe
+from career_history import config, convert, db, embed, filename, structure, transcribe
 
 
 console = Console()

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from era import config, db
+from career_history import config, db
 
 
 console = Console()

@@ -86,13 +86,13 @@ If embedding on a different domain, configure the serving layer to allow that si
 Generate or refresh the graph snapshot from the indexer:
 
 ```bash
-python -m era.cli --config era_indexer/config.yaml graph-refresh
+python -m career_history.cli --config era_indexer/config.yaml graph-refresh
 ```
 
 Check graph status:
 
 ```bash
-python -m era.cli --config era_indexer/config.yaml graph-status
+python -m career_history.cli --config era_indexer/config.yaml graph-status
 ```
 
 The frontend does not extract graph data itself; it only displays the latest persisted snapshot.

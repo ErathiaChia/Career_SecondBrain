@@ -8,14 +8,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from era import bootstrap as bootstrap_mod
-from era import config
-from era import db
-from era import discover as discover_mod
-from era import envfile
-from era import graph
-from era import runner
-from era import v3
+from career_history import bootstrap as bootstrap_mod
+from career_history import config
+from career_history import db
+from career_history import discover as discover_mod
+from career_history import envfile
+from career_history import graph
+from career_history import runner
+from career_history import v3
 
 
 app = typer.Typer(

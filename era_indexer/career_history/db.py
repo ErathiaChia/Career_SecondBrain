@@ -12,8 +12,8 @@ from typing import Any, Iterator
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from era import config
-from era import envfile
+from career_history import config
+from career_history import envfile
 
 
 _engine: Engine | None = None

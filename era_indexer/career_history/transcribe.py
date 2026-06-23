@@ -19,7 +19,7 @@ from typing import Any
 
 from rich.console import Console
 
-from era import config
+from career_history import config
 
 
 console = Console()

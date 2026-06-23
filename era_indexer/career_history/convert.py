@@ -12,7 +12,7 @@ from typing import Any
 
 from rich.console import Console
 
-from era import config
+from career_history import config
 
 
 console = Console()
@@ -175,7 +175,7 @@ def convert_cached(file_id: int, file_path: str, source_hash: str) -> str:
     if ext in _PLAIN_EXTS:
         return convert(file_path)
 
-    from era import db  # lazy import to avoid an import cycle at module load
+    from career_history import db  # lazy import to avoid an import cycle at module load
 
     version = _artifact_version()
     cached = db.get_converted_markdown(file_id, source_hash, version)

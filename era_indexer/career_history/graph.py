@@ -13,7 +13,7 @@ from typing import Any
 
 from rich.console import Console
 
-from era import config, db
+from career_history import config, db
 
 
 console = Console()

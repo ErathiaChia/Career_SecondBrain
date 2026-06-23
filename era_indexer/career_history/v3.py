@@ -13,7 +13,7 @@ from typing import Any
 
 from rich.console import Console
 
-from era import db, graph
+from career_history import db, graph
 
 
 console = Console()
@@ -143,7 +143,7 @@ def validate(query: str = "What do we know about ArgoCD?") -> dict[str, Any]:
         "checks": ready,
         "counts": counts,
         "guidance": (
-            "Run `era v3-refresh --folder <scope>` before enabling "
+            "Run `career_history.cli v3-refresh --folder <scope>` before enabling "
             "`v3.knowledge_os_enabled` for sync."
         ),
     }

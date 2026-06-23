@@ -7,7 +7,7 @@ from typing import Any, Literal, TypedDict
 
 import yaml
 
-from era import envfile
+from career_history import envfile
 
 
 FileKind = Literal["all", "documents", "audio"]
@@ -48,7 +48,7 @@ def load(path: str | Path = "config.yaml") -> dict[str, Any]:
 
 def get() -> dict[str, Any]:
     if _config is None:
-        raise RuntimeError("Config not loaded. Call era.config.load() first.")
+        raise RuntimeError("Config not loaded. Call career_history.config.load() first.")
     return _config
 
 
