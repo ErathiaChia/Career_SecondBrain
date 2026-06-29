@@ -99,7 +99,33 @@ class _StubHandler(BaseHTTPRequestHandler):
             m = re.search(r"question:\s*(.*)", user, re.IGNORECASE)
             if m:
                 q = m.group(1).strip()
-            return json.dumps({"search_query": q or user, "sub_queries": [], "hyde_doc": None})
+            return json.dumps({"search_query": q or user, "sub_queries": [],
+                               "complexity": "moderate", "hyde_doc": None})
+        if "agentic retrieval loop" in s:  # ReAct Judge verdict
+            ul = user.lower()
+            if "exhaust" in ul:
+                # Never satisfied: cycle a unique query each turn so every
+                # iteration adds a NEW doc (avoids the no-new-docs early exit) and
+                # the run hits the max-iters cap.
+                prior = user.count('"action": "research"')
+                token = ["zeta alpha", "zeta bravo", "zeta charlie", "zeta delta"][min(prior, 3)]
+                return json.dumps({"thought": "keep searching", "action": "research",
+                                   "sufficient": False, "missing": "more evidence",
+                                   "reformulations": [token], "query": "", "confidence": 0.2})
+            if "escalate" in ul:
+                # Re-search once, then (seeing its own trajectory) answer — proves
+                # memory persists across iterations.
+                if "TRAJECTORY SO FAR" in user:
+                    return json.dumps({"thought": "now sufficient given prior step",
+                                       "action": "answer", "sufficient": True, "missing": "",
+                                       "reformulations": [], "query": "", "confidence": 0.9})
+                return json.dumps({"thought": "need more context first", "action": "research",
+                                   "sufficient": False, "missing": "menu context",
+                                   "reformulations": ["cafeteria pasta menu Fridays"],
+                                   "query": "", "confidence": 0.3})
+            return json.dumps({"thought": "candidates suffice", "action": "answer",
+                               "sufficient": True, "missing": "", "reformulations": [],
+                               "query": "", "confidence": 0.9})
         # Synthesis: cite the first source.
         return "Based on the sources, we proposed a voice authentication system for Accrete [1]."
 
@@ -161,6 +187,11 @@ def seed(conn):
         ("Cafeteria Menu.md", "Personal", [
             "The cafeteria serves pasta on Fridays and salad on Mondays.",
         ]),
+        # Filler docs with a shared "zeta" token + a unique word each — let the
+        # max-iters test add a new doc on every research turn.
+        ("Alpha Note.md", "Misc", ["zeta alpha unique filler note one"]),
+        ("Bravo Note.md", "Misc", ["zeta bravo unique filler note two"]),
+        ("Charlie Note.md", "Misc", ["zeta charlie unique filler note three"]),
     ]
     with conn.cursor() as cur:
         for file_name, folder, chunks in docs:
@@ -184,6 +215,21 @@ def seed(conn):
                     "VALUES (%s,%s,%s,%s::vector, to_tsvector('simple', %s), %s::jsonb, %s)",
                     (file_id, i, content, vec_literal(embed_text(content)), content, meta, parent_id),
                 )
+        # Structural test: nested project folders under a top-level "14. ST-Engg".
+        # file_registry rows only — the structural branch reads paths, not chunks.
+        for p in (
+            "/vault/14. ST-Engg/01 Project/2026/16_HC3/00-README.md",
+            "/vault/14. ST-Engg/01 Project/2026/16_HC3/A.2. Proposal/p.pdf",
+            "/vault/14. ST-Engg/01 Project/2026/11_Thailand/A.2. Proposal/t.xlsx",
+            "/vault/14. ST-Engg/01 Project/2026/01_IBF/rfp.pdf",
+            "/vault/14. ST-Engg/01 Project/2026/loose.md",  # directly in 2026 → not a project
+        ):
+            cur.execute(
+                "INSERT INTO file_registry (file_path, file_name, file_type, file_hash, folder, is_audio) "
+                "VALUES (%s,%s,'md','h','14. ST-Engg',false)",
+                (p, p.rsplit("/", 1)[1]),
+            )
+
         # Graph: two entities + a mention + a relationship.
         cur.execute("INSERT INTO entities (canonical_name, entity_type) VALUES ('Accrete','company') RETURNING id")
         acc = cur.fetchone()[0]
@@ -229,6 +275,8 @@ def main():
     os.environ["RERANK_ENABLED"] = "1"
     os.environ["RERANK_KIND"] = "llm_score"
     os.environ["QUERY_REWRITE_ENABLED"] = "1"
+    os.environ["QUERY_INSTRUCTION_ENABLED"] = "0"  # keep stub query/doc embeddings symmetric
+    os.environ["AGENTIC_ASK_ENABLED"] = "1"
     os.environ["OPENAI_API_KEY"] = ""
 
     from fastapi.testclient import TestClient
@@ -278,6 +326,48 @@ def main():
     check("returned content is the larger parent chunk",
           r and len(r[0]["content"]) > 80 and "timeline" in r[0]["content"],
           detail="expected parent text spanning multiple children")
+
+    print("\nT7 — structural inventory (census, not semantic search)")
+    inv = client.get("/structure/folders",
+                     params={"question": "list all projects under ST-Engg 01 Project 2026"}).json()
+    names = {f["name"] for f in inv.get("folders", [])}
+    check("structural lists the 3 projects", {"16_HC3", "11_Thailand", "01_IBF"} <= names, detail=str(names))
+    check("structural excludes the loose file", "loose.md" not in names)
+    check("structural count is 3", inv.get("count") == 3, detail=str(inv.get("count")))
+    inv2 = client.get("/structure/folders",
+                      params={"prefix": "/vault/14. ST-Engg/01 Project/2026/"}).json()
+    check("structural by explicit prefix == 3", inv2.get("count") == 3, detail=str(inv2.get("count")))
+    ov = client.get("/structure/overview").json()
+    check("folder overview is non-empty text", bool(ov.get("overview")))
+
+    print("\nT8 — agentic routes a census question to the structural tool")
+    ar = client.post("/ask", json={"query": "how many projects are under ST-Engg 2026?"}).json()
+    check("route == structural", ar.get("route") == "structural", detail=str(ar.get("route")))
+    check("structural answer states the count (3)", "3" in (ar.get("answer") or ""))
+
+    print("\nT9 — confidence gate: strong match → single pass (no judge)")
+    os.environ["STRONG_RERANK_THRESHOLD"] = "0.001"
+    sp = client.post("/ask", json={"query": q, "top_k": 5}).json()
+    check("single pass (0 judge iterations)", sp.get("iterations") == 0, detail=str(sp.get("iterations")))
+    check("single pass still answers", bool(sp.get("answer")))
+
+    print("\nT10 — ReAct loop escalates and carries memory across iterations")
+    os.environ["STRONG_RERANK_THRESHOLD"] = "0.99"
+    es = client.post("/ask", json={"query": "escalate: what did we propose to Accrete?", "top_k": 5}).json()
+    traj = es.get("trajectory", [])
+    check("escalated into the loop (>=2 steps)", len(traj) >= 2, detail=str(len(traj)))
+    check("first step re-searched (action=research)", bool(traj) and traj[0].get("action") == "research")
+    check("a later step answered after seeing the trajectory", any(t.get("action") == "answer" for t in traj))
+    check("queries_tried grew beyond the first pass", len(es.get("queries_tried", [])) > 1)
+
+    print("\nT11 — max-iters cap → best-effort partial answer with notice")
+    os.environ["STRONG_RERANK_THRESHOLD"] = "0.99"
+    os.environ["AGENT_MAX_ITERS"] = "3"
+    ex = client.post("/ask", json={"query": "exhaust the budget on this hard question", "top_k": 5}).json()
+    check("max_iters_reached flagged", ex.get("max_iters_reached") is True, detail=str(ex.get("max_iters_reached")))
+    check("not marked sufficient", ex.get("sufficient") is False)
+    check("gaps populated for the partial answer", bool(ex.get("gaps")))
+    os.environ["STRONG_RERANK_THRESHOLD"] = "0.8"
 
     stub_srv.shutdown()
     print(f"\n==== {len(PASS)} passed, {len(FAIL)} failed ====")

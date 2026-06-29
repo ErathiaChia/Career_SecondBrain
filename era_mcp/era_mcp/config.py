@@ -243,3 +243,38 @@ def doc_first_max_parents_per_doc() -> int:
     """Max matched passages kept per document (keeps one big file from eating
     the whole budget)."""
     return int(os.environ.get("DOC_FIRST_MAX_PARENTS_PER_DOC", "3"))
+
+
+# --- Agentic /ask (router + ReAct Judge loop) ---
+# /ask becomes an intelligent agent: a confidence gate decides single-pass vs a
+# bounded ReAct Judge loop that drives re-search/re-write and can route to the
+# structural-inventory tool. See era_mcp/docs/agentic_mcp_design.md.
+
+def agentic_ask_enabled() -> bool:
+    """Master switch for the agentic /ask path. 0 = legacy single-pass /ask."""
+    return _flag("AGENTIC_ASK_ENABLED", True)
+
+
+def llm_judge_model() -> str:
+    """Reasoning model for the Judge (and reused for synthesis). Runs on the Mac
+    (same endpoint/kind as the primary). Defaults to gemma4:31b-mlx. For a
+    one-model deployment, set LLM_PRIMARY_MODEL to the same value so rewrite +
+    synthesis use it too."""
+    return os.environ.get("LLM_JUDGE_MODEL", "gemma4:31b-mlx")
+
+
+def agent_max_iters() -> int:
+    """Max Judge searches before the agent returns a best-effort partial answer."""
+    return int(os.environ.get("AGENT_MAX_ITERS", "3"))
+
+
+def agent_time_budget() -> float:
+    """Wall-clock budget (seconds) for a whole agentic /ask run."""
+    return float(os.environ.get("AGENT_TIME_BUDGET", "60"))
+
+
+def strong_rerank_threshold() -> float:
+    """Confidence gate (0-1): if the normalized top rerank score is >= this, the
+    first pass answers directly; below it, escalate to the Judge loop. Calibrate
+    against the scorecard once the cross-encoder reranker is live."""
+    return float(os.environ.get("STRONG_RERANK_THRESHOLD", "0.8"))

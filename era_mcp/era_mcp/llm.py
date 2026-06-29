@@ -93,23 +93,34 @@ async def chat(
     max_tokens: int | None = None,
     timeout: float | None = None,
     json_mode: bool = False,
+    model: str | None = None,
+    kind: str | None = None,
+    base_url: str | None = None,
 ) -> str:
     """Return the assistant text. Try the Mac primary, then OpenAI fallback.
+
+    ``model``/``kind``/``base_url`` override the primary provider for this call
+    (default ``None`` → the configured primary). Used to target a different model
+    (e.g. the Judge's ``LLM_JUDGE_MODEL``) on the same Mac without duplicating the
+    fallback chain. The OpenAI fallback is unaffected by these overrides.
 
     Raises ``LLMUnavailable`` only if every configured provider fails.
     """
     temp = config.llm_temperature() if temperature is None else temperature
     max_tok = config.llm_max_tokens() if max_tokens is None else max_tokens
+    p_kind = kind or config.llm_primary_kind()
+    p_base = base_url or config.llm_primary_base_url()
+    p_model = model or config.llm_primary_model()
     errors: list[str] = []
 
     # 1) Primary (Mac).
     try:
-        if config.llm_primary_kind() == "openai_compat":
+        if p_kind == "openai_compat":
             return await _chat_openai_compat(
-                config.llm_primary_base_url(), config.llm_primary_model(), "",
+                p_base, p_model, "",
                 messages, temp, max_tok, timeout, json_mode)
         return await _chat_ollama(
-            config.llm_primary_base_url(), config.llm_primary_model(),
+            p_base, p_model,
             messages, temp, max_tok, timeout, json_mode)
     except _TRANSIENT as e:
         errors.append(f"primary({type(e).__name__})")
@@ -151,8 +162,13 @@ async def chat_json(
     messages: list[dict[str, str]],
     *,
     timeout: float | None = None,
+    model: str | None = None,
+    kind: str | None = None,
+    base_url: str | None = None,
 ) -> Any:
     """``chat`` with JSON mode + robust extraction. Raises on unparseable output
-    or ``LLMUnavailable`` when no provider answers."""
-    raw = await chat(messages, timeout=timeout, json_mode=True)
+    or ``LLMUnavailable`` when no provider answers. ``model``/``kind``/``base_url``
+    override the primary provider (e.g. to target the Judge model)."""
+    raw = await chat(messages, timeout=timeout, json_mode=True,
+                     model=model, kind=kind, base_url=base_url)
     return _extract_json(raw)

@@ -31,10 +31,12 @@ _DEFAULT_QUESTIONS = Path(__file__).with_name("scorecard_questions.json")
 
 
 def _result_paths(item: dict[str, Any]) -> str:
-    """All path-ish text for one result row, lowercased, for substring matching."""
+    """All path-ish text for one result row, lowercased, for substring matching.
+    Covers both chunk rows (file_path/file_name/folder) and structural folder rows
+    (name/path)."""
     return " ".join(
         str(item.get(k) or "")
-        for k in ("file_path", "file_name", "folder")
+        for k in ("file_path", "file_name", "folder", "name", "path")
     ).lower()
 
 
@@ -62,7 +64,10 @@ def _fetch(client: httpx.Client, base_url: str, endpoint: str, query: str,
         json={"query": query, "synthesize": False, "adaptive_k": False, "top_k": top_k},
     )
     resp.raise_for_status()
-    return resp.json().get("chunks", [])
+    data = resp.json()
+    # Semantic answers carry `chunks`; structural (census) answers carry the
+    # folder list under `structural.folders` — score whichever is present.
+    return data.get("chunks") or (data.get("structural") or {}).get("folders") or []
 
 
 def main() -> int:

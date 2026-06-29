@@ -13,6 +13,11 @@
       "expect_path_contains": ["rfp-tdt-2025-0006", "01_IBF"]
     },
     {
+      "id": "list-projects",
+      "query": "list all projects under ST-Engg 2026",
+      "expect_path_contains": ["01_IBF"]
+    },
+    {
       "id": "acronym-lookup",
       "query": "REPLACE: a short acronym query that should hit a known folder",
       "expect_path_contains": ["REPLACE_with_folder_or_filename_fragment"]

@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from era_mcp import config, llm, query_understanding, rerank, retrieval
+from era_mcp import agent, config, llm, query_understanding, rerank, retrieval, structural
 
 app = FastAPI(
     title="Era Vault",
@@ -156,6 +156,10 @@ async def ask_vault(req: AskRequest) -> dict:
     degrades to returning reranked chunks with ``answer=null`` and
     ``degraded=true`` instead of failing.
     """
+    if config.agentic_ask_enabled():
+        return await agent.run_agentic_ask(req)
+
+    # Legacy single-pass path (kill-switch: AGENTIC_ASK_ENABLED=0).
     from fastapi.concurrency import run_in_threadpool
 
     degraded = False
@@ -347,6 +351,35 @@ async def list_folders() -> dict:
     """List all top-level folders in the Era Vault knowledge base."""
     folders = retrieval.list_folders()
     return {"folders": folders}
+
+
+@app.get("/structure/folders", operation_id="list_folders_tree")
+async def list_folders_tree(
+    prefix: Optional[str] = Query(
+        default=None,
+        description="Absolute path prefix to list child folders under. Omit to match from `question`.",
+    ),
+    question: Optional[str] = Query(
+        default=None,
+        description="Natural-language scope, e.g. 'projects under ST-Engg 2026'.",
+    ),
+) -> dict:
+    """List the project/child folders under a path (or matched from a question),
+    each with a file count. This is a COMPLETE census from the live file index —
+    use it for "how many / list all folders or projects", NOT semantic search."""
+    from fastapi.concurrency import run_in_threadpool
+
+    return await run_in_threadpool(structural.project_inventory, question, prefix)
+
+
+@app.get("/structure/overview", operation_id="folder_overview")
+async def folder_overview() -> dict:
+    """Compact live overview of the whole vault folder layout (top-level folders +
+    their immediate subfolders, with file counts). Reflects the current index."""
+    from fastapi.concurrency import run_in_threadpool
+
+    overview = await run_in_threadpool(structural.folder_overview)
+    return {"overview": overview}
 
 
 @app.get("/graph/snapshot", operation_id="graph_snapshot")

@@ -71,6 +71,8 @@ OpenAPI spec is served at `/openapi.json`; interactive docs at `/docs`.
 | `get_graph_subgraph`     | GET    | `/graph/subgraph`                 | Graph export, optionally scoped to one entity |
 | `indexing_status`        | GET    | `/status`                         | File counts per processing stage |
 | `list_folders`           | GET    | `/folders`                        | All top-level folders in the vault |
+| `list_folders_tree`      | GET    | `/structure/folders`              | **Census**: complete list of child folders/projects under a path (or matched from a question), with counts |
+| `folder_overview`        | GET    | `/structure/overview`             | Compact live overview of the whole vault folder layout |
 | `graph_snapshot`         | GET    | `/graph/snapshot`                 | Latest Sigma.js graph snapshot |
 | `graph_status`           | GET    | `/graph/status`                   | Graph extraction + snapshot status |
 
@@ -93,7 +95,40 @@ If a built [`era_graph_web`](../era_graph_web) bundle is present
 - `folder`: restrict to one top-level folder (see `/folders`).
 - `context_window`: surrounding chunks to include each side; `0` = matched chunk only.
 
-## Agent layer (`/ask`)
+## Agentic `/ask` (router + ReAct Judge loop)
+
+When `AGENTIC_ASK_ENABLED=1` (default), `/ask` is an **agent**, not a single pass.
+See [`docs/agentic_mcp_design.md`](docs/agentic_mcp_design.md) for the full design.
+
+1. **Route** — census/enumeration questions ("how many / list all projects /
+   folders") go to the **structural inventory** (a complete `file_registry`
+   listing); everything else goes to semantic retrieval. Semantic search can
+   never *enumerate*, so this is the fix for "list all my projects".
+2. **Confidence gate** — one retrieval pass; if the top (normalized) rerank score
+   is ≥ `STRONG_RERANK_THRESHOLD`, answer directly (fast single pass).
+3. **ReAct Judge loop** (below the gate) — a **stateful** Judge (`LLM_JUDGE_MODEL`,
+   e.g. `gemma4:31b-mlx`, on the Mac) carries a **trajectory** (memory of prior
+   thoughts, queries, and what they returned) across **≤ `AGENT_MAX_ITERS`**
+   searches. Each turn it knows how many searches remain and picks an action:
+   `research` (re-write + re-search), `structural` (switch to the inventory), or
+   `answer`. Bounded by `AGENT_TIME_BUDGET` and a no-new-docs early exit.
+4. **Synthesis** — answers from the best pool **and** the trajectory. If the cap
+   is hit without a confident answer it returns a **best-effort partial answer**
+   and says so plainly.
+
+The response adds: `route`, `confidence`, `sufficient`, `gaps`, `iterations`,
+`queries_tried`, `max_iters_reached`, and `trajectory` (the ReAct steps) — so the
+Open WebUI agent can relay partial answers, surface gaps, or ask a follow-up.
+Always degrades to reranked chunks (`degraded: true`) if the judge LLM is down.
+Set `AGENTIC_ASK_ENABLED=0` for the legacy single-pass `/ask` below.
+
+> **Load the Open WebUI side too:** [`prompts/ai_secondbrain_agent.md`](prompts/ai_secondbrain_agent.md)
+> is the system prompt for the front-facing **AI Second Brain Agent** — it tells
+> that agent how to call these tools and act on the structured JSON, and has a
+> `{{FOLDER_STRUCTURE}}` block you fill in yourself (fetch the current text from
+> `/structure/overview`).
+
+### Legacy single-pass `/ask`
 
 `/ask` turns the server from a chunk-returner into an agent. One request runs the
 full pipeline server-side:
@@ -246,6 +281,11 @@ python -m tools.scorecard --endpoint search  # pure retrieval, no LLM required
 | `QUERY_REWRITE_ENABLED` | `1`                              | LLM query rewriting before retrieval |
 | `HYDE_ENABLED`          | `0`                              | Add a hypothetical-answer doc to the dense query |
 | `QUERY_REWRITE_TIMEOUT` | `12`                             | Query-rewrite request timeout (s) |
+| `AGENTIC_ASK_ENABLED`   | `1`                              | Router + ReAct Judge loop on `/ask`; `0` = legacy single pass |
+| `LLM_JUDGE_MODEL`       | `gemma4:31b-mlx`                 | Reasoning model (Judge + synthesis) on the Mac |
+| `AGENT_MAX_ITERS`       | `3`                              | Max Judge searches before a best-effort partial answer |
+| `AGENT_TIME_BUDGET`     | `60`                             | Whole-run wall-clock budget (s) |
+| `STRONG_RERANK_THRESHOLD` | `0.8`                          | Confidence gate (0-1): ≥ answers single-pass, < escalates to the loop |
 
 ### Enabling the cross-encoder reranker (Fix 4)
 
@@ -331,3 +371,100 @@ http://<host>:8808/openapi.json
 
 Open WebUI reads the spec and registers each endpoint's `operation_id`
 (`search_vault`, `indexing_status`, …) as a callable tool.
+
+## Use cases — north-star capability map
+
+The long-term target is 35 use cases across six clusters. They all read from a
+**shared substrate**: *Engagements · People · Artifacts · Commitments · Decisions
+· Events*. **Today the system has only ~1.5 of those six** — **Artifacts**
+(indexed files/chunks, fully) and a thin **Engagements** layer (folder/project
+enumeration via the structural tool). **People, Commitments, Decisions, and
+Events do not exist as structured data yet** (the entity/graph tables exist but
+extraction is off), and there is **no proactive ("push") layer** at all. So what
+ships today is a strong *retrieval + agentic Q&A engine over documents*; most of
+the list below is still aspirational. Status is honest, not optimistic:
+
+- ✅ **works today** — supported by the shipped retrieval / agentic / structural layer
+- 🟡 **partial** — approximable on demand via retrieval+synthesis (or partly in `era_auditor`), but not a built feature and missing the structured/stateful version
+- ❌ **not yet** — needs substrate (People/Commitments/Decisions/Events/project-state) and/or a proactive scheduler that does not exist
+
+**Continuity & synthesis**
+| # | Use case | Status |
+|---|---|---|
+| 1 | Re-entry briefs (30-sec catch-up) | 🟡 doc-synthesis only; no real state/blockers/owed |
+| 2 | Meeting debriefs (transcript → actions) | 🟡 transcripts indexed; extraction not built |
+| 3 | Cross-project pattern matching | ✅ semantic search across projects |
+| 4 | Question / clarification builder | 🟡 on-demand synthesis, not a feature |
+| 5 | "What changed since X" diffs | ❌ needs an Events/version model |
+| 6 | Next-best-action suggestion | ❌ needs cross-engagement state |
+
+**Relationship & stakeholder**
+| # | Use case | Status |
+|---|---|---|
+| 7 | Commitment tracking / slippage | ❌ no Commitments substrate, no watcher |
+| 8 | Meeting prep briefs | 🟡 topic/person retrieval; no interaction history |
+| 9 | Stakeholder profiles | ❌ no People entities |
+| 10 | Entity disambiguation (the "Iris" problem) | ❌ entity layer empty |
+| 11 | Contact-owed ledger | ❌ needs Commitments |
+| 12 | Networking surfacing | ❌ needs People + relationships |
+
+**Time & attention** (entirely *push* — we have no proactive layer)
+| # | Use case | Status |
+|---|---|---|
+| 13 | Dependency / blocker watch | ❌ |
+| 14 | Deadline proximity alerts | ❌ |
+| 15 | Stale-thread nudges | ❌ |
+| 16 | Time / leverage audit | ❌ no activity data captured |
+| 17 | Scope-creep detection | ❌ needs scope baseline + compare |
+
+**Drafting & communication**
+| # | Use case | Status |
+|---|---|---|
+| 18 | Standup generator | ❌ no activity capture |
+| 19 | Email triage + draft replies | ❌ email not ingested; no drafting |
+| 20 | Follow-up drafting | 🟡 feasible from transcripts; not built |
+| 21 | Status report generation | 🟡 synthesizable; not built |
+| 22 | Onboarding pack generator | 🟡 like re-entry brief; not built |
+| 23 | Proposal / SOW drafting | 🟡 retrieval scaffold via #29; not full draft |
+
+**Governance & audit**
+| # | Use case | Status |
+|---|---|---|
+| 24 | Decision log with rationale | ❌ no Decisions substrate |
+| 25 | Risk register maintenance | ❌ |
+| 26 | Knowledge gap detection | 🟡 folder-level in `era_auditor`; not content-level |
+| 27 | Contradiction detection | ❌ needs decisions + reasoning |
+| 28 | Document version reconciliation | 🟡 `era_auditor` detects version families; no diffing |
+
+**Career positioning & reuse**
+| # | Use case | Status |
+|---|---|---|
+| 29 | Prior-artifact surfacing | ✅ semantic search + reuse registry |
+| 30 | Accomplishment logging | ❌ no ongoing capture |
+| 31 | Estimation calibration | ❌ needs estimates + actuals |
+| 32 | Reusable template extraction | 🟡 `era_auditor`-adjacent; not built |
+| 33 | Win / loss capture | ❌ |
+| 34 | Skill / experience inventory | ❌ (weakly synthesizable from docs) |
+| 35 | Personal retrospective prompts | ❌ push + events |
+
+**Tally: ~2 ✅ · ~11 🟡 · ~22 ❌.** The two that truly work (#3, #29) are pure
+retrieval. To reach the rest, four things must be built — none exist today:
+
+1. **Substrate / extraction** — populate **People, Commitments, Decisions,
+   Events** (and project *state/timeline*) from documents + meeting transcripts.
+   This is the entity/graph layer (currently switched off) *plus* new extractors
+   for commitments/decisions/events. Unlocks ~20 of the ❌ items. The single
+   biggest lever.
+2. **Proactive ("push") layer** — a scheduler/watcher that runs without being
+   asked and notifies on slippage, deadlines, stale threads, scope drift. Unlocks
+   the entire Time & attention cluster + commitment tracking + nudges.
+3. **Drafting features** — turn retrieval + state into drafts (standup, status
+   report, follow-up, SOW). Synthesis exists; these specific workflows don't.
+4. **New ingestion sources** — email (for triage/drafting) and activity/time
+   data (for audits) — the vault is files-only today.
+
+This is the natural next horizon after the agentic MCP, and it is exactly the
+"project/entity brain" direction in [`docs/agentic_mcp_design.md`](docs/agentic_mcp_design.md)
+and the project memory. **Scope note:** populating People/Decisions/Events is
+substrate work that belongs in the indexer; the proactive layer is new. Neither
+overlaps the Auditor/Librarian (vault cleanup).
