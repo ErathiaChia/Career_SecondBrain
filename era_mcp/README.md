@@ -173,6 +173,48 @@ injected by Docker; locally, export them or use an `.env` file.
 > document vectors will be incomparable. Default is `qwen3-embedding:0.6b`
 > (1024-dim), matching `document_chunks.embedding vector(1024)`.
 
+### V3 retrieval relevance
+
+Four changes that improve *which* chunks come back, all read-side (no re-embed):
+
+1. **Query instruction (qwen3).** `qwen3-embedding` is instruction-tuned: the
+   query is embedded with a task instruction while the indexer embeds documents
+   raw. This asymmetry matches the model's training. Turn off for a
+   non-instruction model like `bge-m3`.
+2. **Filename / folder / path search.** The lexical (FTS) channel also matches
+   `file_name` + `folder` + `file_path`, so short queries — acronyms (`IBF`),
+   customer names, RFP numbers — hit the path a file was filed under even when
+   the body never spells them out (`01_IBF` is normalized to `01 IBF`).
+3. **Multi-query fusion.** `/ask` runs the rewritten query **and** the
+   rewriter's sub-queries, merges the candidate pools, and reranks once against
+   the original question (previously the sub-queries were generated then
+   discarded).
+4. **Adaptive breadth.** The rewriter classifies each question `simple` /
+   `moderate` / `complex`; `/ask` sizes how many chunks to retrieve+cite
+   accordingly (default `8` / `20` / `40`), bounded for a ~9B synthesis model.
+   Send `"adaptive_k": false` to use the request's `top_k` instead.
+
+| Variable                  | Default | Notes |
+| ------------------------- | ------- | ----- |
+| `QUERY_INSTRUCTION_ENABLED` | `1`   | Wrap queries with the instruction prefix (qwen3). `0` for bge-m3. |
+| `QUERY_INSTRUCTION`       | _(built-in)_ | The task instruction text. |
+| `FILENAME_SEARCH_ENABLED` | `1`     | Match FTS against file_name/folder/path. `0` if too slow on a huge corpus. |
+| `LEXICAL_PATH_WEIGHT`     | `0.5`   | ts_rank multiplier for a path match vs a body match. |
+| `MULTI_QUERY_ENABLED`     | `1`     | Retrieve for sub-queries too and fuse the pools. |
+| `ADAPTIVE_TOPK_ENABLED`   | `1`     | Size top_k to question complexity. |
+| `TOPK_SIMPLE` / `TOPK_MODERATE` / `TOPK_COMPLEX` | `8` / `20` / `40` | Per-complexity chunk counts. |
+
+**Measuring it.** [`tools/scorecard.py`](tools/scorecard.py) scores whether the
+right document is retrieved, and at what rank, across a list of real questions —
+use it to compare before/after. Copy `tools/scorecard_questions.example.json` to
+`tools/scorecard_questions.json`, fill in your questions, start the server, then:
+
+```bash
+cd era_mcp
+python -m tools.scorecard --endpoint ask     # full /ask pipeline (needs the Mac LLM)
+python -m tools.scorecard --endpoint search  # pure retrieval, no LLM required
+```
+
 ### Agent layer (`/ask`) variables
 
 | Variable                | Default                          | Notes |

@@ -1,6 +1,7 @@
 """Retrieval layer: embed a query via Ollama, search pgvector, return results."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -45,9 +46,18 @@ def _parent_chunks_available() -> bool:
 
 
 async def embed_query(text_input: str) -> list[float]:
-    """Embed a single query string via the Ollama HTTP API."""
+    """Embed a single query string via the Ollama HTTP API.
+
+    qwen3-embedding is instruction-tuned: the query is wrapped with a task
+    instruction while the indexer embeds documents raw. This query/document
+    asymmetry matches how the model was trained and improves retrieval; toggle
+    via QUERY_INSTRUCTION_ENABLED (off for non-instruction models like bge-m3).
+    """
+    text_to_embed = text_input
+    if config.query_instruction_enabled():
+        text_to_embed = f"Instruct: {config.query_instruction()}\nQuery: {text_input}"
     url = f"{config.ollama_base_url()}/api/embed"
-    payload = {"model": config.embedding_model(), "input": text_input}
+    payload = {"model": config.embedding_model(), "input": text_to_embed}
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
@@ -100,6 +110,30 @@ def _fused_candidates(
 
     where = (" AND ".join(conditions)) if conditions else "TRUE"
 
+    # Lexical channel: optionally also match file_name + folder + file_path, not
+    # just the chunk body, so short queries (acronyms, customer names, RFP ids)
+    # hit the path a file was filed under even when the body never spells them
+    # out. translate() turns '01_IBF' / 'a-b.pdf' separators into spaces so the
+    # 'simple' tokenizer emits 'ibf' / 'a' / 'b' / 'pdf'.
+    if config.filename_search_enabled():
+        _path_tsv = (
+            "to_tsvector('simple', translate("
+            "coalesce(fr.file_name,'') || ' ' || coalesce(fr.folder,'') || ' ' "
+            "|| coalesce(fr.file_path,''), '_/.-', '    '))"
+        )
+        fts_where = (
+            "(dc.search_vector @@ websearch_to_tsquery('simple', :qtext) "
+            f"OR {_path_tsv} @@ websearch_to_tsquery('simple', :qtext))"
+        )
+        fts_rank = (
+            "ts_rank(dc.search_vector, websearch_to_tsquery('simple', :qtext)) "
+            f"+ :w_path * ts_rank({_path_tsv}, websearch_to_tsquery('simple', :qtext))"
+        )
+        params["w_path"] = config.lexical_path_weight()
+    else:
+        fts_where = "dc.search_vector @@ websearch_to_tsquery('simple', :qtext)"
+        fts_rank = "ts_rank(dc.search_vector, websearch_to_tsquery('simple', :qtext))"
+
     parent_select = (
         "pc.content AS parent_content, dc.parent_chunk_id AS parent_chunk_id"
         if use_parent else
@@ -125,20 +159,12 @@ def _fused_candidates(
         ),
         fts AS (
             SELECT dc.id AS chunk_pk,
-                   ROW_NUMBER() OVER (
-                       ORDER BY ts_rank(
-                           dc.search_vector,
-                           websearch_to_tsquery('simple', :qtext)
-                       ) DESC
-                   ) AS rank
+                   ROW_NUMBER() OVER (ORDER BY ({fts_rank}) DESC) AS rank
               FROM document_chunks dc
               JOIN file_registry fr ON dc.file_id = fr.id
-             WHERE dc.search_vector @@ websearch_to_tsquery('simple', :qtext)
+             WHERE ({fts_where})
                AND {where}
-             ORDER BY ts_rank(
-                 dc.search_vector,
-                 websearch_to_tsquery('simple', :qtext)
-             ) DESC
+             ORDER BY ({fts_rank}) DESC
              LIMIT :cand
         ),
         fused AS (
@@ -291,6 +317,63 @@ async def search_async(
         rerank_enabled = config.rerank_enabled()
     if rerank_enabled:
         hits = await rerank_mod.rerank(query, hits, top_k=len(hits))
+    return await run_in_threadpool(
+        _expand_winners, hits, top_k, context_window, use_parent
+    )
+
+
+async def multi_search_async(
+    queries: list[tuple[str, list[float]]],
+    rerank_query: str,
+    top_k: int | None = None,
+    folder: str | None = None,
+    kind: str | None = None,
+    context_window: int = 3,
+    rerank_enabled: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Multi-query hybrid search + single rerank (async). Backs /ask.
+
+    Each ``(query_text, query_embedding)`` pair contributes its own fused
+    candidate pool; the pools are merged (deduped by chunk, keeping the best RRF
+    score), reranked ONCE against ``rerank_query`` (the user's original
+    question), then expanded to parents/neighbor windows. With a single pair this
+    reduces to ``search_async``. Sub-queries that the rewriter already produces
+    are thus actually used instead of discarded.
+    """
+    from fastapi.concurrency import run_in_threadpool
+
+    from era_mcp import rerank as rerank_mod
+
+    if not queries:
+        return []
+    if top_k is None:
+        top_k = config.default_top_k()
+    cand = max(config.candidate_pool(), top_k)
+    use_parent = _use_parent()
+
+    pools = await asyncio.gather(*[
+        run_in_threadpool(
+            _fused_candidates, q_text, q_emb, folder, kind, cand, cand, use_parent
+        )
+        for q_text, q_emb in queries
+    ])
+
+    # Merge pools, deduped by chunk identity, keeping the best RRF score seen.
+    merged: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for pool in pools:
+        for hit in pool:
+            key = (hit["file_id"], hit["chunk_index"])
+            prev = merged.get(key)
+            if prev is None or hit["rrf_score"] > prev["rrf_score"]:
+                merged[key] = hit
+    hits = sorted(merged.values(), key=lambda h: h["rrf_score"], reverse=True)
+    if not hits:
+        return []
+
+    if rerank_enabled is None:
+        rerank_enabled = config.rerank_enabled()
+    if rerank_enabled:
+        hits = await rerank_mod.rerank(rerank_query, hits, top_k=len(hits))
     return await run_in_threadpool(
         _expand_winners, hits, top_k, context_window, use_parent
     )

@@ -16,14 +16,26 @@ _SYSTEM = (
     "JSON object with keys:\n"
     '  "search_query": a concise keyword-rich version of the question (good for '
     "both lexical and semantic search),\n"
-    '  "sub_queries": 0-3 focused sub-questions if the query is multi-part, else [],\n'
+    '  "sub_queries": 0-3 focused sub-questions covering distinct angles of the '
+    "question (e.g. expand an acronym, add a known full name, split a multi-part "
+    "ask), else [],\n"
+    '  "complexity": one of "simple" (a single fact / lookup, e.g. "who is Ron?"), '
+    '"moderate" (one topic, project, or document), or "complex" (broad or '
+    'cross-cutting, e.g. "everything about X", "compare all our chatbot work"),\n'
     '  "hyde_doc": a 1-2 sentence hypothetical answer passage (only if asked), else null.\n'
     "Keep proper nouns (clients, products, people, projects) verbatim."
 )
 
+_VALID_COMPLEXITY = {"simple", "moderate", "complex"}
+
 
 def identity(query: str) -> dict[str, Any]:
-    return {"search_query": query, "sub_queries": [], "hyde_doc": None}
+    return {
+        "search_query": query,
+        "sub_queries": [],
+        "complexity": "moderate",
+        "hyde_doc": None,
+    }
 
 
 async def rewrite_query(query: str) -> dict[str, Any]:
@@ -44,6 +56,14 @@ async def rewrite_query(query: str) -> dict[str, Any]:
     search_query = (data.get("search_query") or "").strip() or query
     sub = data.get("sub_queries") or []
     sub = [str(s).strip() for s in sub if str(s).strip()][:3] if isinstance(sub, list) else []
+    complexity = str(data.get("complexity") or "").strip().lower()
+    if complexity not in _VALID_COMPLEXITY:
+        complexity = "moderate"
     hyde = data.get("hyde_doc")
     hyde = str(hyde).strip() if (hyde and config.hyde_enabled()) else None
-    return {"search_query": search_query, "sub_queries": sub, "hyde_doc": hyde}
+    return {
+        "search_query": search_query,
+        "sub_queries": sub,
+        "complexity": complexity,
+        "hyde_doc": hyde,
+    }

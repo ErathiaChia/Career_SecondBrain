@@ -8,6 +8,7 @@ Run directly:
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -91,7 +92,11 @@ async def search_vault_v3(req: KnowledgeSearchRequest) -> dict:
 
 class AskRequest(BaseModel):
     query: str = Field(description="Natural-language question to answer.")
-    top_k: int = Field(default=_DEFAULT_TOP_K, description="Chunks to retrieve and cite.")
+    top_k: int = Field(default=_DEFAULT_TOP_K, description="Chunks to retrieve and cite (used when adaptive_k is false).")
+    adaptive_k: bool = Field(
+        default=True,
+        description="Size retrieval breadth to question complexity (simple/moderate/complex). Overrides top_k when on.",
+    )
     folder: Optional[str] = Field(default=None, description="Restrict to a folder.")
     use_graph: bool = Field(default=True, description="Augment with graph entities/relationships.")
     rewrite: bool = Field(default=True, description="LLM query rewriting before retrieval.")
@@ -156,14 +161,37 @@ async def ask_vault(req: AskRequest) -> dict:
         if req.rewrite else query_understanding.identity(req.query)
     )
     search_query = understanding["search_query"]
-    embed_text = understanding.get("hyde_doc") or search_query
+    sub_queries = (
+        understanding.get("sub_queries", []) if config.multi_query_enabled() else []
+    )
+    complexity = understanding.get("complexity", "moderate")
 
-    # 2) Embed + hybrid retrieve + rerank.
-    embedding = await retrieval.embed_query(embed_text)
-    chunks = await retrieval.search_async(
-        query=search_query,
-        query_embedding=embedding,
-        top_k=req.top_k,
+    # Adaptive breadth: size how many chunks to retrieve+cite to the question
+    # (lookup -> few, "everything about X" -> more), bounded for a ~9B model.
+    if req.adaptive_k and config.adaptive_topk_enabled():
+        effective_top_k = config.topk_for_complexity(complexity)
+    else:
+        effective_top_k = req.top_k
+
+    # 2) Embed the main query (+ each sub-query) and run multi-query hybrid
+    #    retrieve + a single rerank against the user's ORIGINAL question. The main
+    #    query uses the HyDE passage as embed text when present; sub-queries embed
+    #    themselves. De-dup identical strings so nothing is embedded twice.
+    main_embed_text = understanding.get("hyde_doc") or search_query
+    plan: list[tuple[str, str]] = [(search_query, main_embed_text)]
+    seen = {search_query}
+    for s in sub_queries:
+        if s not in seen:
+            seen.add(s)
+            plan.append((s, s))
+    embeddings = await asyncio.gather(
+        *[retrieval.embed_query(embed_text) for _, embed_text in plan]
+    )
+    queries = [(q_text, emb) for (q_text, _), emb in zip(plan, embeddings)]
+    chunks = await retrieval.multi_search_async(
+        queries=queries,
+        rerank_query=req.query,
+        top_k=effective_top_k,
         folder=req.folder,
         rerank_enabled=req.rerank,
     )
@@ -171,7 +199,9 @@ async def ask_vault(req: AskRequest) -> dict:
     # 3) Optional graph augmentation (best-effort; empty if not yet populated).
     graph = None
     if req.use_graph:
-        graph = await run_in_threadpool(retrieval.graph_only, search_query, req.top_k)
+        graph = await run_in_threadpool(
+            retrieval.graph_only, search_query, effective_top_k
+        )
 
     # 4) Citations mirror the supporting chunks 1:1.
     citations = [
@@ -202,7 +232,9 @@ async def ask_vault(req: AskRequest) -> dict:
     return {
         "query": req.query,
         "rewritten_query": search_query if search_query != req.query else None,
-        "sub_queries": understanding.get("sub_queries", []),
+        "sub_queries": sub_queries,
+        "complexity": complexity,
+        "effective_top_k": effective_top_k,
         "answer": answer,
         "citations": citations,
         "chunks": chunks,

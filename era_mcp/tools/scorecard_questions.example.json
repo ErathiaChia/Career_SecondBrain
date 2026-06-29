@@ -1,0 +1,26 @@
+{
+  "_comment": "Copy this to scorecard_questions.json and replace with YOUR real questions. 'expect_path_contains' lists fragments of the file path/name/folder of a document that SHOULD be retrieved for the query (case-insensitive substring match, ANY match counts). Aim for ~15 questions spanning lookups, one-topic, and broad 'everything about X' asks.",
+  "base_url": "http://localhost:8808",
+  "questions": [
+    {
+      "id": "ibf-latest",
+      "query": "what's the latest on IBF?",
+      "expect_path_contains": ["01_IBF", "Institute of Banking and Finance"]
+    },
+    {
+      "id": "ibf-rfp",
+      "query": "IBF programme accreditation AI agents RFP",
+      "expect_path_contains": ["rfp-tdt-2025-0006", "01_IBF"]
+    },
+    {
+      "id": "acronym-lookup",
+      "query": "REPLACE: a short acronym query that should hit a known folder",
+      "expect_path_contains": ["REPLACE_with_folder_or_filename_fragment"]
+    },
+    {
+      "id": "customer-broad",
+      "query": "REPLACE: everything we have on <customer>",
+      "expect_path_contains": ["REPLACE_with_customer_folder"]
+    }
+  ]
+}

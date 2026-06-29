@@ -33,6 +33,24 @@ def embedding_model() -> str:
     return os.environ.get("EMBEDDING_MODEL", "qwen3-embedding:0.6b")
 
 
+# --- Query embedding instruction (qwen3-embedding is instruction-tuned) ---
+# qwen3-embedding expects the QUERY to be wrapped with a task instruction while
+# DOCUMENTS are embedded raw (the indexer embeds raw). This asymmetry is how the
+# model was trained and materially affects retrieval quality. Toggle off to A/B
+# or when using a non-instruction model (e.g. bge-m3, which does not need it).
+
+def query_instruction_enabled() -> bool:
+    return _flag("QUERY_INSTRUCTION_ENABLED", True)
+
+
+def query_instruction() -> str:
+    return os.environ.get(
+        "QUERY_INSTRUCTION",
+        "Given a search query, retrieve relevant passages from a personal work "
+        "knowledge base that answer the query",
+    )
+
+
 def parent_context_enabled() -> bool:
     """When true, /search returns the larger parent chunk as context for each
     matched child ("small-to-big"). Falls back automatically if parent_chunks
@@ -70,6 +88,21 @@ def rrf_fts_weight() -> float:
     vector weight to stop generic keyword matches from dominating
     natural-language queries."""
     return float(os.environ.get("RRF_FTS_WEIGHT", "0.5"))
+
+
+def filename_search_enabled() -> bool:
+    """Also match the lexical channel against file_name + folder + file_path (not
+    just chunk body), so short queries -- acronyms ("IBF"), customer names, RFP
+    numbers -- hit the path they were filed under even when the body never spells
+    them out. Disable with FILENAME_SEARCH_ENABLED=0 (e.g. if it costs too much on
+    a very large corpus)."""
+    return _flag("FILENAME_SEARCH_ENABLED", True)
+
+
+def lexical_path_weight() -> float:
+    """ts_rank multiplier for a filename/folder/path match relative to a body
+    match in the FTS channel. Used only when FILENAME_SEARCH_ENABLED."""
+    return float(os.environ.get("LEXICAL_PATH_WEIGHT", "0.5"))
 
 
 def _flag(var: str, default: bool) -> bool:
@@ -161,3 +194,29 @@ def hyde_enabled() -> bool:
 
 def query_rewrite_timeout() -> float:
     return float(os.environ.get("QUERY_REWRITE_TIMEOUT", "12"))
+
+
+def multi_query_enabled() -> bool:
+    """Run retrieval for the rewritten query AND each generated sub-query, then
+    fuse the candidate pools before reranking. Without this the sub-queries the
+    rewriter already produces are discarded. Disable with MULTI_QUERY_ENABLED=0."""
+    return _flag("MULTI_QUERY_ENABLED", True)
+
+
+# --- Adaptive retrieval breadth (simple / moderate / complex) ---
+# The rewriter classifies each question's complexity; /ask then sizes how many
+# chunks to retrieve+cite to it. Sized for a local ~9B synthesis model -- a
+# lookup needs a handful, "everything about X" needs more, but not so many that
+# the model loses the thread. Tune the bands via env; disable to use req.top_k.
+
+def adaptive_topk_enabled() -> bool:
+    return _flag("ADAPTIVE_TOPK_ENABLED", True)
+
+
+def topk_for_complexity(complexity: str) -> int:
+    bands = {
+        "simple": int(os.environ.get("TOPK_SIMPLE", "8")),
+        "moderate": int(os.environ.get("TOPK_MODERATE", "20")),
+        "complex": int(os.environ.get("TOPK_COMPLEX", "40")),
+    }
+    return bands.get((complexity or "").strip().lower(), bands["moderate"])
