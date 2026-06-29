@@ -25,6 +25,10 @@ models:
   # too small). A 9B MLX model is fast on Metal and reliable at JSON; avoid 35B
   # for per-chunk extraction (~15-40s/chunk).
   graph_extraction_model: "qwen3.5:9b-mlx"
+  # Use a NON-thinking model here (gemma*, llama*) — reasoning models (qwen3.x)
+  # return empty/garbage under the forced JSON format. Read timeout per extraction
+  # call (seconds); document-level calls on a local model can take minutes.
+  graph_extraction_timeout: 600
   # Optional: separate model for the Contextual-Retrieval situating blurb.
   # Defaults to graph_extraction_model when unset.
   # contextual_blurb_model: "qwen3.5:9b-mlx"

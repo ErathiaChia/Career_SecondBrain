@@ -862,6 +862,53 @@ def graph_chunks_for_extraction(
         ]
 
 
+def documents_for_extraction(
+    folder: str | None = None,
+    limit: int | None = None,
+    extractor_version: str = "doc-entity-facts-v1",
+    force: bool = False,
+    max_chars: int = 12000,
+) -> list[dict[str, Any]]:
+    """One row per FILE for document-level extraction: representative (first)
+    chunk id, the file's chunks concatenated + capped to ``max_chars``, and a
+    content hash over the full text. Incremental + folder-scoped: skips files
+    whose representative chunk is already extracted at ``extractor_version`` with
+    the same content (unless ``force``)."""
+    params: dict[str, Any] = {"extractor_version": extractor_version, "max_chars": max_chars}
+    doc_where = ["dc.content IS NOT NULL", "length(trim(dc.content)) > 0"]
+    if folder:
+        doc_where.append("fr.folder = :folder")
+        params["folder"] = folder
+    state_where = "" if force else (
+        "WHERE ges.chunk_id IS NULL "
+        "OR ges.extractor_version <> :extractor_version "
+        "OR ges.content_hash <> d.content_hash "
+        "OR ges.status = 'failed'"
+    )
+    sql = f"""
+        WITH docs AS (
+            SELECT fr.id AS file_id, fr.file_name, fr.folder,
+                   min(dc.id) AS rep_chunk_id,
+                   left(string_agg(dc.content, ' ' ORDER BY dc.chunk_index), :max_chars) AS content,
+                   md5(string_agg(coalesce(dc.content, ''), '' ORDER BY dc.chunk_index)) AS content_hash
+              FROM document_chunks dc
+              JOIN file_registry fr ON fr.id = dc.file_id
+             WHERE {" AND ".join(doc_where)}
+             GROUP BY fr.id, fr.file_name, fr.folder
+        )
+        SELECT d.file_id, d.file_name, d.folder, d.rep_chunk_id, d.content, d.content_hash
+          FROM docs d
+          LEFT JOIN graph_extraction_state ges ON ges.chunk_id = d.rep_chunk_id
+         {state_where}
+         ORDER BY d.folder, d.file_name
+    """
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with conn() as c:
+        rows = c.execute(text(sql), params).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
 def clear_chunk_graph_data(chunk_id: int) -> None:
     with conn() as c:
         c.execute(text("DELETE FROM relationship_evidence WHERE chunk_id = :chunk_id"), {"chunk_id": chunk_id})

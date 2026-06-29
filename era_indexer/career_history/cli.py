@@ -281,6 +281,27 @@ def graph_refresh_cmd(
     console.print(table)
 
 
+@app.command("extract-documents")
+def extract_documents_cmd(
+    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
+    limit: Optional[int] = typer.Option(None, "--limit", "-n"),
+    force: bool = typer.Option(False, "--force"),
+):
+    """Document-level graph extraction: ONE LLM call per FILE (not per chunk).
+    The scalable path for large vaults. Folder-scoped + incremental + resumable."""
+    result = graph.refresh_documents(folder=folder, limit=limit, force=force)
+    table = Table(title="Document extraction" + (f" - {folder}" if folder else ""))
+    table.add_column("Field")
+    table.add_column("Value", justify="right")
+    for key in ("folder", "processed_documents", "failed_documents",
+                "entities_seen", "relationships_seen", "facts_seen"):
+        table.add_row(key, str(result.get(key)))
+    snapshot = result.get("snapshot") or {}
+    table.add_row("snapshot_nodes", str(snapshot.get("node_count", 0)))
+    table.add_row("snapshot_edges", str(snapshot.get("edge_count", 0)))
+    console.print(table)
+
+
 @app.command("graph-status")
 def graph_status_cmd(
     scope: str = typer.Option("all", "--scope"),

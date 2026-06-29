@@ -329,11 +329,23 @@ chunks and writes new rows — **it never re-embeds or re-chunks**.
 # Configure seed.project_roots in config.yaml first. Also runs inside `discover`.
 python -m career_history.cli seed-entities --folder "14. ST-Engg"
 
-# One enriched LLM pass per chunk → entities + relationships + facts
-# (decisions/commitments/events → knowledge_facts). Folder-scoped, incremental.
+# DOCUMENT-LEVEL extraction (recommended at scale): ONE LLM call per FILE, not
+# per chunk. For an 81k-chunk vault that's ~hundreds of calls instead of tens of
+# thousands. Folder-scoped, incremental (resumable), rebuilds the snapshot.
+python -m career_history.cli extract-documents --folder "14. ST-Engg"
+
+# CHUNK-LEVEL extraction (per chunk → finest granularity, but infeasible on a
+# large corpus — one LLM call per chunk). Use only on small/targeted scopes.
 python -m career_history.cli graph-refresh --folder "14. ST-Engg" --limit 50
 python -m career_history.cli graph-status        # per-chunk extraction progress
 ```
+
+> **Pick the right granularity.** `extract-documents` extracts entities/
+> relationships/facts once per file (chunks concatenated, capped at
+> `MAX_DOC_CHARS`) — the same entities recur across a file's chunks, so this
+> captures them at a fraction of the cost. Use a **non-thinking** model
+> (`graph_extraction_model`: gemma/llama; reasoning models return empty under
+> forced JSON) and raise `graph_extraction_timeout` for long local calls.
 
 Notes:
 

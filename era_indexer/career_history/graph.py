@@ -24,6 +24,13 @@ console = Console()
 EXTRACTOR_VERSION = "entity-rel-facts-v2"
 MAX_CHUNK_CHARS = 4500
 
+# Document-level extraction (one LLM call per FILE instead of per chunk) — the
+# scalable path for large vaults (~1 call/file vs tens of thousands of chunks).
+# Uses its own version so its per-file state in graph_extraction_state never
+# collides with chunk-level runs.
+DOC_EXTRACTOR_VERSION = "doc-entity-facts-v1"
+MAX_DOC_CHARS = 12000
+
 ENTITY_TYPES = {
     "person", "team", "company", "project", "technology", "product",
     "meeting", "concept", "process", "role", "topic", "document",
@@ -117,6 +124,57 @@ def refresh(
     }
 
 
+def refresh_documents(
+    folder: str | None = None,
+    limit: int | None = None,
+    force: bool = False,
+    rebuild_snapshot: bool = True,
+) -> dict[str, Any]:
+    """Document-level extraction: ONE LLM call per FILE (its chunks concatenated
+    and capped to MAX_DOC_CHARS), instead of per chunk. The scalable path for
+    large vaults — ~one call per file vs tens of thousands. Entities/relationships/
+    facts are persisted against the file's representative (first) chunk; the run is
+    incremental + folder-scoped via graph_extraction_state (DOC_EXTRACTOR_VERSION)."""
+    docs = db.documents_for_extraction(
+        folder=folder, limit=limit,
+        extractor_version=DOC_EXTRACTOR_VERSION, force=force, max_chars=MAX_DOC_CHARS,
+    )
+    processed = failed = entity_count = relationship_count = fact_count = 0
+    for doc in docs:
+        try:
+            db.clear_chunk_graph_data(doc["rep_chunk_id"])
+            extracted = extract_chunk(
+                {"content": doc["content"], "file_name": doc["file_name"],
+                 "folder": doc["folder"], "section_path": None, "metadata": {}},
+                max_chars=MAX_DOC_CHARS,
+            )
+            ctx = {"file_id": doc["file_id"], "chunk_id": doc["rep_chunk_id"], "section_id": None}
+            ids_by_key = _persist_entities(ctx, extracted.get("entities", []))
+            entity_count += len(ids_by_key)
+            relationship_count += _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
+            fact_count += _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
+            db.mark_graph_chunk_extracted(doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION)
+            processed += 1
+        except Exception as e:
+            failed += 1
+            db.mark_graph_chunk_extracted(
+                doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
+                status="failed", error_message=f"{type(e).__name__}: {e}",
+            )
+            console.log(f"[red]Doc extraction failed[/red] {doc['file_name']}: {e}")
+    db.cleanup_orphan_graph_rows()
+    snapshot = build_and_save_snapshot(folder=folder) if rebuild_snapshot else None
+    return {
+        "folder": folder,
+        "processed_documents": processed,
+        "failed_documents": failed,
+        "entities_seen": entity_count,
+        "relationships_seen": relationship_count,
+        "facts_seen": fact_count,
+        "snapshot": snapshot,
+    }
+
+
 def build_and_save_snapshot(folder: str | None = None) -> dict[str, Any]:
     scope = _scope(folder)
     rows = db.graph_snapshot_rows(folder=folder)
@@ -137,8 +195,9 @@ def status(scope: str = "all") -> dict[str, Any]:
 def extract_chunk(
     chunk: dict[str, Any],
     include_relationships: bool = True,
+    max_chars: int = MAX_CHUNK_CHARS,
 ) -> dict[str, list[dict[str, Any]]]:
-    text = str(chunk.get("content") or "")[:MAX_CHUNK_CHARS]
+    text = str(chunk.get("content") or "")[:max_chars]
     context = {
         "file_name": chunk.get("file_name"),
         "folder": chunk.get("folder"),
@@ -460,6 +519,20 @@ def _clean_ts(value: Any) -> str | None:
     return match.group(0) if match else None
 
 
+def _extraction_timeout() -> int:
+    """Read timeout (s) for one extraction LLM call. Local models on long
+    document-level prompts can take minutes, so the default is generous. Override
+    with models.graph_extraction_timeout in config.yaml or ERA_GRAPH_EXTRACTION_TIMEOUT."""
+    raw = (
+        os.environ.get("ERA_GRAPH_EXTRACTION_TIMEOUT")
+        or config.get().get("models", {}).get("graph_extraction_timeout")
+    )
+    try:
+        return int(raw) if raw else 600
+    except (TypeError, ValueError):
+        return 600
+
+
 def _extract_with_ollama(
     text: str,
     context: dict[str, Any],
@@ -489,7 +562,7 @@ def _extract_with_ollama(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with urllib.request.urlopen(req, timeout=_extraction_timeout()) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         raise RuntimeError(f"Ollama request failed: {e}") from e
