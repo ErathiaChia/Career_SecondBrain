@@ -763,6 +763,93 @@ def search_communities(query: str, limit: int = 10) -> list[dict[str, Any]]:
     return [dict(row._mapping) for row in rows]
 
 
+def _fact_row(row: Any) -> dict[str, Any]:
+    d = dict(row._mapping)
+    if d.get("occurred_at") is not None:
+        d["occurred_at"] = d["occurred_at"].isoformat()
+    return d
+
+
+_FACTS_PRESENT: bool | None = None
+
+
+def _facts_table_present(conn: Any) -> bool:
+    """Whether knowledge_facts exists (migration 0005). Cached; degrades to [] when
+    absent so older deployments never error."""
+    global _FACTS_PRESENT
+    if _FACTS_PRESENT is None:
+        _FACTS_PRESENT = conn.execute(
+            text("SELECT to_regclass('public.knowledge_facts')")
+        ).scalar() is not None
+    return _FACTS_PRESENT
+
+
+_FACT_SELECT = """
+    SELECT kf.id, kf.kind, kf.statement, kf.attributes, kf.occurred_at,
+           kf.source_quote, kf.confidence,
+           subj.canonical_name AS subject,
+           obj.canonical_name  AS object,
+           proj.canonical_name AS project,
+           fr.file_name, fr.folder
+      FROM knowledge_facts kf
+      LEFT JOIN entities subj ON subj.id = kf.subject_entity_id
+      LEFT JOIN entities obj  ON obj.id  = kf.object_entity_id
+      LEFT JOIN entities proj ON proj.id = kf.project_entity_id
+      JOIN file_registry fr ON fr.id = kf.file_id
+"""
+
+
+def search_facts(query: str, kind: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    """Search structured facts (decision/commitment/event) by statement/quote text
+    and optional kind. Returns [] when knowledge_facts is absent."""
+    with _get_engine().connect() as conn:
+        if not _facts_table_present(conn):
+            return []
+        conds = ["(kf.statement ILIKE :like OR kf.source_quote ILIKE :like)"]
+        params: dict[str, Any] = {"like": f"%{query}%", "limit": limit}
+        if kind:
+            conds.append("kf.kind = :kind")
+            params["kind"] = kind
+        sql = text(f"{_FACT_SELECT} WHERE {' AND '.join(conds)} "
+                   "ORDER BY kf.confidence DESC NULLS LAST, kf.id DESC LIMIT :limit")
+        rows = conn.execute(sql, params).fetchall()
+    return [_fact_row(r) for r in rows]
+
+
+def facts_in_text(q: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Facts whose project/subject/object entity name appears IN the text — the
+    natural-language counterpart used by /ask graph augmentation."""
+    with _get_engine().connect() as conn:
+        if not _facts_table_present(conn):
+            return []
+        sql = text(f"""{_FACT_SELECT}
+             WHERE (proj.canonical_name IS NOT NULL AND length(proj.canonical_name) >= 3
+                    AND :q ILIKE '%' || proj.canonical_name || '%')
+                OR (subj.canonical_name IS NOT NULL AND length(subj.canonical_name) >= 3
+                    AND :q ILIKE '%' || subj.canonical_name || '%')
+                OR (obj.canonical_name IS NOT NULL AND length(obj.canonical_name) >= 3
+                    AND :q ILIKE '%' || obj.canonical_name || '%')
+             ORDER BY kf.confidence DESC NULLS LAST, kf.id DESC
+             LIMIT :limit""")
+        rows = conn.execute(sql, {"q": q, "limit": limit}).fetchall()
+    return [_fact_row(r) for r in rows]
+
+
+def facts_for_entity(entity_id: int, limit: int = 25) -> list[dict[str, Any]]:
+    """All facts where the entity is the subject, object, or project."""
+    with _get_engine().connect() as conn:
+        if not _facts_table_present(conn):
+            return []
+        sql = text(f"""{_FACT_SELECT}
+             WHERE kf.subject_entity_id = :eid
+                OR kf.object_entity_id = :eid
+                OR kf.project_entity_id = :eid
+             ORDER BY kf.confidence DESC NULLS LAST, kf.id DESC
+             LIMIT :limit""")
+        rows = conn.execute(sql, {"eid": entity_id, "limit": limit}).fetchall()
+    return [_fact_row(r) for r in rows]
+
+
 def get_document_summary(file_id: int | None = None, file_name: str | None = None) -> dict[str, Any] | None:
     """Return the latest document summary for a file id or name fragment."""
     conditions = []
@@ -909,6 +996,7 @@ def graph_only(query: str, top_k: int | None = None) -> dict[str, Any]:
         "entities": _safe(lambda: entities_in_text(query, limit=top_k), []),
         "relationships": _safe(lambda: relationships_in_text(query, limit=top_k), []),
         "communities": _safe(lambda: search_communities(query, limit=top_k), []),
+        "facts": _safe(lambda: facts_in_text(query, limit=top_k), []),
     }
 
 
@@ -938,6 +1026,7 @@ def knowledge_search(
     entities = _safe(lambda: entities_in_text(query, limit=top_k), [])
     relationships = _safe(lambda: relationships_in_text(query, limit=top_k), [])
     communities = _safe(lambda: search_communities(query, limit=top_k), [])
+    facts = _safe(lambda: facts_in_text(query, limit=top_k), [])
     summaries = []
     for hit in chunks[:top_k]:
         summary = _safe(lambda: get_document_summary(file_name=hit.get("file_name")), None)
@@ -952,6 +1041,7 @@ def knowledge_search(
                 "entities",
                 "relationships",
                 "communities",
+                "facts",
                 "summaries",
             ],
         },
@@ -959,6 +1049,7 @@ def knowledge_search(
         "entities": entities,
         "relationships": relationships,
         "communities": communities,
+        "facts": facts,
         "supporting_chunks": chunks,
         "provenance": {
             "folder": folder,

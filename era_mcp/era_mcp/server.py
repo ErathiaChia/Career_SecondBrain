@@ -287,6 +287,17 @@ async def search_communities(
     return {"results": retrieval.search_communities(query=query, limit=limit)}
 
 
+@app.get("/facts/search", operation_id="search_facts")
+async def search_facts(
+    query: str = Query(description="Text in a decision/commitment/event statement or quote."),
+    kind: Optional[str] = Query(default=None, description='Filter by "decision", "commitment", or "event".'),
+    limit: int = Query(default=10, ge=1, le=100),
+) -> dict:
+    """Search structured facts (decisions, commitments, events) extracted from the
+    vault. Use for "what did we decide / commit to / when did X happen" questions."""
+    return {"results": retrieval.search_facts(query=query, kind=kind, limit=limit)}
+
+
 @app.get("/documents/summary", operation_id="get_document_summary")
 async def get_document_summary(
     file_id: Optional[int] = Query(default=None),
@@ -318,6 +329,15 @@ async def get_entity_neighbors(
     if result["entity"] is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return result
+
+
+@app.get("/entities/{entity_id}/facts", operation_id="get_entity_facts")
+async def get_entity_facts(
+    entity_id: int,
+    limit: int = Query(default=25, ge=1, le=100),
+) -> dict:
+    """Decisions/commitments/events where this entity is the subject, object, or project."""
+    return {"results": retrieval.facts_for_entity(entity_id=entity_id, limit=limit)}
 
 
 @app.get("/graph/subgraph", operation_id="get_graph_subgraph")

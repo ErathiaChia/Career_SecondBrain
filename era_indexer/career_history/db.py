@@ -866,6 +866,7 @@ def clear_chunk_graph_data(chunk_id: int) -> None:
     with conn() as c:
         c.execute(text("DELETE FROM relationship_evidence WHERE chunk_id = :chunk_id"), {"chunk_id": chunk_id})
         c.execute(text("DELETE FROM entity_mentions WHERE chunk_id = :chunk_id"), {"chunk_id": chunk_id})
+        c.execute(text("DELETE FROM knowledge_facts WHERE chunk_id = :chunk_id"), {"chunk_id": chunk_id})
 
 
 def mark_graph_chunk_extracted(
@@ -1013,6 +1014,72 @@ def insert_relationship_evidence(
             "chunk_id": chunk_id,
             "section_id": section_id,
             "evidence_text": evidence_text,
+            "extractor_version": extractor_version,
+        }).fetchone()
+        return row[0]
+
+
+def files_for_seeding(folder: str | None = None) -> list[dict[str, Any]]:
+    """All registered files (id + path) for deterministic entity seeding."""
+    sql = "SELECT id AS file_id, file_path FROM file_registry"
+    params: dict[str, Any] = {}
+    if folder:
+        sql += " WHERE folder = :folder"
+        params["folder"] = folder
+    with conn() as c:
+        return [dict(r._mapping) for r in c.execute(text(sql), params).fetchall()]
+
+
+def clear_seed_mentions(extractor_version: str, folder: str | None = None) -> None:
+    """Remove prior deterministic-seed mentions so re-seeding never duplicates."""
+    sql = "DELETE FROM entity_mentions WHERE extractor_version = :v"
+    params: dict[str, Any] = {"v": extractor_version}
+    if folder:
+        sql += " AND file_id IN (SELECT id FROM file_registry WHERE folder = :folder)"
+        params["folder"] = folder
+    with conn() as c:
+        c.execute(text(sql), params)
+
+
+def insert_fact(
+    kind: str,
+    statement: str,
+    file_id: int,
+    chunk_id: int | None,
+    subject_entity_id: int | None = None,
+    object_entity_id: int | None = None,
+    project_entity_id: int | None = None,
+    attributes: dict[str, Any] | None = None,
+    occurred_at: str | None = None,
+    source_quote: str | None = None,
+    confidence: float | None = None,
+    extractor_version: str = "entity-rel-facts-v2",
+) -> int:
+    """Insert one structured fact (decision/commitment/event). Facts are cleared
+    per-chunk before re-extraction (see clear_chunk_graph_data), so no upsert."""
+    with conn() as c:
+        row = c.execute(text("""
+            INSERT INTO knowledge_facts
+                (kind, statement, subject_entity_id, object_entity_id, project_entity_id,
+                 attributes, occurred_at, file_id, chunk_id, source_quote, confidence,
+                 extractor_version)
+            VALUES
+                (:kind, :statement, :subject_entity_id, :object_entity_id, :project_entity_id,
+                 CAST(:attributes AS jsonb), CAST(:occurred_at AS timestamp), :file_id, :chunk_id,
+                 :source_quote, :confidence, :extractor_version)
+            RETURNING id
+        """), {
+            "kind": kind,
+            "statement": statement,
+            "subject_entity_id": subject_entity_id,
+            "object_entity_id": object_entity_id,
+            "project_entity_id": project_entity_id,
+            "attributes": json.dumps(attributes or {}),
+            "occurred_at": occurred_at,
+            "file_id": file_id,
+            "chunk_id": chunk_id,
+            "source_quote": source_quote,
+            "confidence": confidence,
             "extractor_version": extractor_version,
         }).fetchone()
         return row[0]

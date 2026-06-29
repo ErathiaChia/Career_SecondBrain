@@ -114,6 +114,14 @@ def discover(
             removed += 1
             console.log(f"[dim]removed[/dim] {os.path.basename(known)}")
 
+    # Deterministic project-entity seeding (no LLM) so project entities track the
+    # folder taxonomy as it changes. No-ops unless seed.project_roots is set.
+    try:
+        from career_history import seed_entities
+        seed_entities.seed(folder=folder)
+    except Exception as e:  # never let seeding break discovery
+        console.log(f"[red]seed-entities failed[/red]: {e}")
+
     summary = {
         "discovered": discovered,
         "new_or_changed": changed,

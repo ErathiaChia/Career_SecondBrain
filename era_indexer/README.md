@@ -318,6 +318,40 @@ python -m career_history.cli retry
 python -m career_history.cli retry --folder Meetings
 ```
 
+## Layer 1: entities, facts & seeding (additive — no re-embed)
+
+Layer 1 builds the **entity substrate** the agent reasons over (people, projects,
+relationships, and **decisions/commitments/events**). It reads already-indexed
+chunks and writes new rows — **it never re-embeds or re-chunks**.
+
+```bash
+# Deterministic project entities from the folder taxonomy (no LLM, fast).
+# Configure seed.project_roots in config.yaml first. Also runs inside `discover`.
+python -m career_history.cli seed-entities --folder "14. ST-Engg"
+
+# One enriched LLM pass per chunk → entities + relationships + facts
+# (decisions/commitments/events → knowledge_facts). Folder-scoped, incremental.
+python -m career_history.cli graph-refresh --folder "14. ST-Engg" --limit 50
+python -m career_history.cli graph-status        # per-chunk extraction progress
+```
+
+Notes:
+
+- **`graph-refresh` extracts regardless of the `v2` flags.** `entity_extraction_enabled` /
+  `relationship_extraction_enabled` / `graph_retrieval_enabled` only gate (a)
+  auto-refresh during `update`/`sync` (all three must be true) and (b) whether
+  retrieval *uses* the graph. To populate data you just run the command.
+- **One pass, not three.** Entities, relationships, and facts come from a single
+  LLM call per chunk (`graph.py`, `EXTRACTOR_VERSION = entity-rel-facts-v2`).
+- **Incremental.** `graph_extraction_state` tracks per-chunk version+hash, so
+  re-runs skip done chunks; `--force` re-extracts.
+- **Cost.** ~15–40s/chunk on the local model — pilot a folder, validate quality,
+  then roll out. Point `models.graph_extraction_model` at your reasoning model
+  (e.g. `gemma4:31b-mlx`).
+- **Read side.** `era_mcp` serves the result via `/entities/*`, `/relationships/search`,
+  `/facts/search`, `graph_only`, and `/knowledge/search` — no MCP change needed
+  to see entities/relationships; facts get their own endpoints.
+
 ## How "update" works
 
 `python -m career_history.cli update` is `discover` followed by `run`. It uses

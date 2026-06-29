@@ -18,7 +18,10 @@ from career_history import config, db
 
 console = Console()
 
-EXTRACTOR_VERSION = "entity-relationship-v1"
+# Bumped to v2 when facts (decisions/commitments/events) joined the same pass.
+# A version change makes graph_chunks_for_extraction treat all chunks as needing
+# (re)extraction, so the first v2 run produces entities + relationships + facts.
+EXTRACTOR_VERSION = "entity-rel-facts-v2"
 MAX_CHUNK_CHARS = 4500
 
 ENTITY_TYPES = {
@@ -29,8 +32,12 @@ ENTITY_TYPES = {
 
 RELATIONSHIP_TYPES = {
     "OWNS", "USES", "DEPENDS_ON", "MANAGES", "ATTENDED", "MENTIONED_IN",
-    "RELATED_TO", "DISCUSSED_IN", "REFERENCES",
+    "RELATED_TO", "DISCUSSED_IN", "REFERENCES", "COMMITTED_TO", "DECIDED",
 }
+
+# Structured facts extracted in the SAME pass as entities/relationships.
+FACT_KINDS = {"decision", "commitment", "event"}
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 NODE_COLORS = {
     "person": "#f97316",
@@ -64,7 +71,7 @@ def refresh(
         extractor_version=EXTRACTOR_VERSION,
         force=force,
     )
-    processed = failed = entity_count = relationship_count = 0
+    processed = failed = entity_count = relationship_count = fact_count = 0
     for chunk in chunks:
         try:
             db.clear_chunk_graph_data(chunk["chunk_id"])
@@ -77,6 +84,7 @@ def refresh(
                     extracted.get("relationships", []),
                     ids_by_key,
                 )
+            fact_count += _persist_facts(chunk, extracted.get("facts", []), ids_by_key)
             db.mark_graph_chunk_extracted(
                 chunk["chunk_id"],
                 chunk["content_hash"],
@@ -104,6 +112,7 @@ def refresh(
         "failed_chunks": failed,
         "entities_seen": entity_count,
         "relationships_seen": relationship_count,
+        "facts_seen": fact_count,
         "snapshot": snapshot,
     }
 
@@ -386,6 +395,71 @@ def _persist_relationships(
     return count
 
 
+def _persist_facts(
+    chunk: dict[str, Any],
+    facts: list[dict[str, Any]],
+    ids_by_key: dict[tuple[str, str], int],
+) -> int:
+    """Persist decision/commitment/event facts, linking subject/object/project to
+    entities extracted in the same chunk. One bad fact never fails the chunk."""
+    count = 0
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        kind = str(fact.get("kind") or "").strip().lower()
+        statement = _clean_evidence(fact.get("statement"))
+        if kind not in FACT_KINDS or not statement:
+            continue
+        attributes = fact.get("attributes") if isinstance(fact.get("attributes"), dict) else {}
+        try:
+            db.insert_fact(
+                kind=kind,
+                statement=statement,
+                file_id=chunk["file_id"],
+                chunk_id=chunk["chunk_id"],
+                subject_entity_id=_resolve_fact_entity(fact.get("subject"), fact.get("subject_type"), ids_by_key),
+                object_entity_id=_resolve_fact_entity(fact.get("object"), fact.get("object_type"), ids_by_key),
+                project_entity_id=_resolve_fact_entity(fact.get("project"), "project", ids_by_key),
+                attributes=attributes,
+                occurred_at=_clean_ts(fact.get("occurred_at")),
+                source_quote=_clean_evidence(fact.get("quote") or fact.get("evidence") or ""),
+                confidence=_float(fact.get("confidence")) or 0.6,
+                extractor_version=EXTRACTOR_VERSION,
+            )
+            count += 1
+        except Exception:
+            continue
+    return count
+
+
+def _resolve_fact_entity(
+    name: Any,
+    type_hint: Any,
+    ids_by_key: dict[tuple[str, str], int],
+) -> int | None:
+    """Map a fact participant name to an entity id extracted in the same chunk."""
+    cleaned = _clean_name(name)
+    if not cleaned:
+        return None
+    key = _entity_key(cleaned)
+    if type_hint:
+        hinted = ids_by_key.get((key, _normalize_type(type_hint)))
+        if hinted is not None:
+            return hinted
+    for (k, _t), entity_id in ids_by_key.items():
+        if k == key:
+            return entity_id
+    return None
+
+
+def _clean_ts(value: Any) -> str | None:
+    """Return a YYYY-MM-DD date if one is present in the value, else None."""
+    if not value:
+        return None
+    match = _DATE_RE.search(str(value))
+    return match.group(0) if match else None
+
+
 def _extract_with_ollama(
     text: str,
     context: dict[str, Any],
@@ -432,6 +506,7 @@ Extract a compact, provenance-ready knowledge graph from this KB chunk.
 
 Allowed entity types: {", ".join(sorted(ENTITY_TYPES - {"document"}))}.
 Allowed relationship types: {", ".join(sorted(RELATIONSHIP_TYPES))}.
+Fact kinds: decision, commitment, event.
 
 Rules:
 - Return only valid JSON.
@@ -440,6 +515,10 @@ Rules:
 - Prefer precise relationship labels from the allowed list.
 - Every relationship must include a short evidence quote from the chunk.
 - {relationship_instruction}
+- Extract "facts" ONLY for explicit: decisions made, commitments/promises (who
+  owes what to whom, by when), or dated events. Reference entity names that also
+  appear in "entities"; leave subject/object/project empty if unclear. Each fact
+  needs a short verbatim quote. Return an empty array if none are explicit.
 
 Context:
 {json.dumps(context, ensure_ascii=False)}
@@ -450,7 +529,10 @@ JSON schema:
     {{"name": "string", "type": "person|team|project|company|technology|product|meeting|concept|process|organization", "aliases": [], "mention_text": "string", "confidence": 0.0}}
   ],
   "relationships": [
-    {{"source": "entity name", "source_type": "entity type", "target": "entity name", "target_type": "entity type", "type": "OWNS|USES|DEPENDS_ON|MANAGES|ATTENDED|MENTIONED_IN|RELATED_TO|DISCUSSED_IN|REFERENCES", "evidence": "short quote", "confidence": 0.0}}
+    {{"source": "entity name", "source_type": "entity type", "target": "entity name", "target_type": "entity type", "type": "OWNS|USES|DEPENDS_ON|MANAGES|ATTENDED|MENTIONED_IN|RELATED_TO|DISCUSSED_IN|REFERENCES|COMMITTED_TO|DECIDED", "evidence": "short quote", "confidence": 0.0}}
+  ],
+  "facts": [
+    {{"kind": "decision|commitment|event", "statement": "string", "subject": "entity name", "object": "entity name", "project": "project name", "attributes": {{"due_at": "YYYY-MM-DD or text", "status": "open|pending|done", "direction": "owed_by_me|owed_to_me", "counterparty": "name"}}, "occurred_at": "YYYY-MM-DD", "quote": "short verbatim quote", "confidence": 0.0}}
   ]
 }}
 
@@ -463,6 +545,7 @@ def _normalize_extraction(parsed: dict[str, Any]) -> dict[str, list[dict[str, An
     return {
         "entities": parsed.get("entities", []) if isinstance(parsed.get("entities"), list) else [],
         "relationships": parsed.get("relationships", []) if isinstance(parsed.get("relationships"), list) else [],
+        "facts": parsed.get("facts", []) if isinstance(parsed.get("facts"), list) else [],
     }
 
 

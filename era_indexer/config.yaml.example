@@ -88,9 +88,12 @@ v2:
   contextual_llm_blurb_enabled: false
   hybrid_search_enabled: false
   reranker_enabled: false
-  # Knowledge graph (entities + relationships). All three must be true together
-  # for sync auto-refresh. For a pilot you can instead run the graph-refresh /
-  # v3-refresh CLI commands directly on a single --folder.
+  # Knowledge graph (entities + relationships + facts). The graph-refresh /
+  # v3-refresh CLI commands extract directly on a single --folder REGARDLESS of
+  # these flags; the flags only gate (a) auto-refresh during update/sync (all
+  # three must be true) and (b) whether retrieval uses the graph. The same
+  # extraction pass also writes decisions/commitments/events to knowledge_facts
+  # (Layer 1). Extraction is additive over already-indexed chunks: no re-embed.
   entity_extraction_enabled: false
   relationship_extraction_enabled: false
   graph_retrieval_enabled: false
@@ -118,6 +121,19 @@ v3:
   summary_prompt_version: "v3-summary-v1"
   community_algorithm: "relationship-neighborhood"
   community_algorithm_version: "v3-community-v1"
+
+# Deterministic project-entity seeding (Layer 1; no LLM). The folder segment
+# immediately AFTER each fragment below is treated as a project; aliases are
+# derived by stripping the numeric prefix ("01_IBF" -> "IBF"). Runs inside
+# discover and via the `seed-entities` command. Leave empty to disable. Use the
+# path fragments as they appear in file_registry.file_path; add each active
+# period's container.
+seed:
+  project_roots: []
+  # Example:
+  #   project_roots:
+  #     - "/01 Project/2026/"
+  #     - "/01 Project/2025/"
 
 extensions:
   audio:     [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".mov"]

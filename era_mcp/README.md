@@ -65,6 +65,8 @@ OpenAPI spec is served at `/openapi.json`; interactive docs at `/docs`.
 | `search_entities`        | GET    | `/entities/search`                | Search canonical graph entities |
 | `search_relationships`   | GET    | `/relationships/search`           | Search typed relationships + evidence |
 | `search_communities`     | GET    | `/communities/search`             | Search graph communities |
+| `search_facts`           | GET    | `/facts/search`                   | Search decisions / commitments / events (Layer 1) |
+| `get_entity_facts`       | GET    | `/entities/{entity_id}/facts`     | Facts where an entity is subject/object/project |
 | `get_document_summary`   | GET    | `/documents/summary`              | Latest summary for a file (by id or name) |
 | `get_section_summary`    | GET    | `/sections/{section_id}/summary`  | Latest summary for a section |
 | `get_entity_neighbors`   | GET    | `/entities/{entity_id}/neighbors` | Graph neighbors for one entity |
@@ -183,6 +185,25 @@ NAS rather than the tiny NAS Ollama — e.g. a cron entry:
 ssh mac "cd ~/GitHub/Career_SecondBrain/era_indexer && \
   python -m career_history.cli v3-refresh --folder 'Meetings'"
 ```
+
+### Populating the entity + fact substrate (Layer 1)
+
+The `/entities/*`, `/relationships/search`, and `/facts/search` reads serve data
+**built by the indexer**, not by this server (era_mcp stays read-only). Populate
+it on the Mac, then these endpoints light up — no era_mcp change:
+
+```bash
+ssh mac "cd ~/GitHub/Career_SecondBrain/era_indexer && \
+  python -m career_history.cli seed-entities --folder '14. ST-Engg' && \
+  python -m career_history.cli graph-refresh --folder '14. ST-Engg' --limit 50"
+```
+
+**Trigger:** run the indexer CLI on the Mac (manually or via cron — the
+NAS→Mac pattern above). **Monitor from here:** `GET /graph/status` reports
+per-chunk extraction progress (reads `graph_extraction_state`). A one-click
+"extract from Open WebUI" enqueue bridge is intentionally deferred (optional) —
+extraction runs on the Mac where the model lives. See
+[`../era_indexer/README.md`](../era_indexer/README.md) ("Layer 1") for details.
 
 ## Configuration
 

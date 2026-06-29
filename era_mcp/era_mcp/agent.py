@@ -197,11 +197,23 @@ async def _synthesize(question: str, chunks: list[dict], graph: dict | None,
         content = (c.get("content") or "").strip()[:1500]
         blocks.append(f"[{i}] {c.get('file_name', '?')} (folder: {c.get('folder', '?')}):\n{content}")
     graph_note = ""
-    if graph and graph.get("entities"):
-        ents = ", ".join(e.get("canonical_name", "") for e in graph["entities"][:10]
+    if graph:
+        parts: list[str] = []
+        ents = ", ".join(e.get("canonical_name", "") for e in (graph.get("entities") or [])[:10]
                          if e.get("canonical_name"))
         if ents:
-            graph_note = f"\n\nRelated entities in the knowledge graph: {ents}"
+            parts.append(f"Related entities: {ents}")
+        fact_lines = []
+        for f in (graph.get("facts") or [])[:8]:
+            attrs = f.get("attributes") or {}
+            extra = [x for x in (attrs.get("due_at") and f"due {attrs['due_at']}",
+                                 attrs.get("status"), attrs.get("counterparty")) if x]
+            suffix = f" ({'; '.join(extra)})" if extra else ""
+            fact_lines.append(f"- [{f.get('kind')}] {f.get('statement')}{suffix}")
+        if fact_lines:
+            parts.append("Known facts (decisions/commitments/events):\n" + "\n".join(fact_lines))
+        if parts:
+            graph_note = "\n\n" + "\n\n".join(parts)
     user = (f"QUESTION: {question}\n\nINVESTIGATION:\n{investigation}\n\n"
             f"SOURCES:\n{chr(10).join(blocks)}{graph_note}")
     return await llm.chat(

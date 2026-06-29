@@ -15,6 +15,7 @@ from career_history import discover as discover_mod
 from career_history import envfile
 from career_history import graph
 from career_history import runner
+from career_history import seed_entities
 from career_history import v3
 
 
@@ -322,6 +323,22 @@ def retry_cmd(
     """Reset all failed items to pending."""
     n = db.retry_failed(folder=folder)
     console.log(f"[green]Reset {n} failed item(s) to pending.[/green]")
+
+
+@app.command("seed-entities")
+def seed_entities_cmd(
+    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
+):
+    """Seed canonical project entities + file mentions from the folder taxonomy
+    (no LLM). Configure seed.project_roots in config.yaml. Also runs inside
+    `discover`; this command runs it standalone."""
+    result = seed_entities.seed(folder=folder)
+    table = Table(title="Seed entities" + (f" - {folder}" if folder else ""))
+    table.add_column("Field")
+    table.add_column("Value", justify="right")
+    for key, value in result.items():
+        table.add_row(key, str(value))
+    console.print(table)
 
 
 def _update(

@@ -167,6 +167,7 @@ def apply_schema(conn, repo_root: str):
             "0002_graph_snapshots.sql",
             "0003_v3_knowledge_os.sql",
             "0004_embeddings_1024_parent_chunks.sql",
+            "0005_knowledge_facts.sql",
         )],
     ]
     with conn.cursor() as cur:
@@ -244,6 +245,20 @@ def seed(conn):
             "INSERT INTO relationships (source_entity_id, relationship_type, target_entity_id, confidence) "
             "VALUES (%s,'USES',%s,0.9)",
             (acc, va),
+        )
+        # Layer 1 fact: a commitment tied to the Accrete entity (subject + project).
+        cur.execute(
+            "INSERT INTO knowledge_facts "
+            "(kind, statement, subject_entity_id, project_entity_id, attributes, "
+            " file_id, source_quote, confidence, extractor_version) "
+            "VALUES ('commitment', %s, %s, %s, %s::jsonb, 1, %s, 0.9, 'test-facts-v2')",
+            (
+                "Send Accrete the voice authentication proposal next week",
+                acc, acc,
+                json.dumps({"due_at": "2026-07-05", "status": "open",
+                            "direction": "owed_by_me", "counterparty": "Accrete"}),
+                "we will send the proposal next week",
+            ),
         )
     conn.commit()
 
@@ -368,6 +383,22 @@ def main():
     check("not marked sufficient", ex.get("sufficient") is False)
     check("gaps populated for the partial answer", bool(ex.get("gaps")))
     os.environ["STRONG_RERANK_THRESHOLD"] = "0.8"
+
+    print("\nT12 — Layer 1 facts (decisions/commitments/events)")
+    fs = client.get("/facts/search", params={"query": "proposal"}).json()
+    check("/facts/search returns the commitment",
+          any(f.get("kind") == "commitment" for f in fs.get("results", [])), detail=str(fs))
+    fsk = client.get("/facts/search", params={"query": "proposal", "kind": "commitment"}).json()
+    check("/facts/search kind filter works", len(fsk.get("results", [])) > 0)
+    kf = client.post("/knowledge/search", json={"query": q, "top_k": 5}).json()
+    check("/knowledge/search surfaces facts", len(kf.get("facts", [])) > 0, detail=str(kf.get("facts")))
+    af = client.post("/ask", json={"query": q, "top_k": 5}).json()
+    check("/ask graph carries facts", len((af.get("graph") or {}).get("facts", [])) > 0,
+          detail=str((af.get("graph") or {}).get("facts")))
+    acc_ent = next((e for e in kf.get("entities", []) if "Accrete" in (e.get("canonical_name") or "")), None)
+    if acc_ent and acc_ent.get("id"):
+        ef = client.get(f"/entities/{acc_ent['id']}/facts").json()
+        check("/entities/{id}/facts returns the fact", len(ef.get("results", [])) > 0)
 
     stub_srv.shutdown()
     print(f"\n==== {len(PASS)} passed, {len(FAIL)} failed ====")
