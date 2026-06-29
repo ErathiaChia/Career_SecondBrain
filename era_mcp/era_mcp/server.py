@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from era_mcp import config, llm, query_understanding, retrieval
+from era_mcp import config, llm, query_understanding, rerank, retrieval
 
 app = FastAPI(
     title="Era Vault",
@@ -117,13 +117,19 @@ _SYNTH_SYSTEM = (
 
 
 async def _synthesize(question: str, chunks: list[dict], graph: Optional[dict]) -> str:
-    blocks = []
+    # Group consecutive passages from the same document under one header so the
+    # model reads coherent documents (doc-first assembly emits them grouped).
+    # The [n] numbering stays 1:1 with the citations list regardless of grouping.
+    blocks: list[str] = []
+    last_file: object = object()
     for i, c in enumerate(chunks, start=1):
+        fname = c.get("file_name", "?")
+        if fname != last_file:
+            blocks.append(f"=== Document: {fname} (folder: {c.get('folder', '?')}) ===")
+            last_file = fname
         content = (c.get("content") or "").strip()[:1500]
-        blocks.append(
-            f"[{i}] {c.get('file_name', '?')} (folder: {c.get('folder', '?')}):\n{content}"
-        )
-    context = "\n\n".join(blocks)
+        blocks.append(f"[{i}] {content}")
+    context = "\n".join(blocks)
     graph_note = ""
     if graph and graph.get("entities"):
         ents = ", ".join(
@@ -242,6 +248,11 @@ async def ask_vault(req: AskRequest) -> dict:
         "degraded": degraded,
         "degraded_reason": degraded_reason,
         "provider": llm.provider_status(),
+        # Whether reranking actually fired on THIS response (chunks carry a
+        # rerank_score only when the reranker succeeded; it silently falls back
+        # to RRF order otherwise). rerank_backend reports the configuration.
+        "reranked": bool(req.rerank and chunks and any("rerank_score" in c for c in chunks)),
+        "rerank_backend": rerank.status() if req.rerank else None,
     }
 
 

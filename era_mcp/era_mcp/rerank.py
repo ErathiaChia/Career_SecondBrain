@@ -19,6 +19,22 @@ import httpx
 from era_mcp import config, llm
 
 
+def status() -> dict[str, Any]:
+    """Reranker configuration, for surfacing in /ask responses and debugging.
+
+    Note: this reports how the reranker is *configured*, not whether a given
+    request succeeded. To confirm reranking actually fired on a response, check
+    whether the returned chunks carry a ``rerank_score`` (the /ask response also
+    exposes a top-level ``reranked`` boolean derived that way)."""
+    kind = config.rerank_kind()
+    return {
+        "enabled": config.rerank_enabled(),
+        "kind": kind,
+        "model": config.rerank_model() if kind == "infinity" else None,
+        "base_url": config.rerank_base_url() if kind == "infinity" else None,
+    }
+
+
 async def rerank(
     query: str,
     candidates: list[dict[str, Any]],
@@ -48,7 +64,12 @@ async def _rerank_infinity(
     query: str, candidates: list[dict[str, Any]], text_key: str
 ) -> list[dict[str, Any]]:
     documents = [(c.get(text_key) or "") for c in candidates]
-    payload = {"model": config.rerank_model(), "query": query, "documents": documents}
+    payload = {
+        "model": config.rerank_model(),
+        "query": query,
+        "documents": documents,
+        "return_documents": False,  # we only need indices+scores; keeps the response small
+    }
     async with httpx.AsyncClient(timeout=config.rerank_timeout()) as client:
         resp = await client.post(f"{config.rerank_base_url()}/rerank", json=payload)
         resp.raise_for_status()

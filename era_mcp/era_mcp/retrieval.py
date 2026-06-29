@@ -231,6 +231,7 @@ def _expand_winners(
     top_k: int,
     context_window: int,
     use_parent: bool,
+    doc_first: bool = False,
 ) -> list[dict[str, Any]]:
     """Expand the chosen candidates to full context.
 
@@ -238,11 +239,19 @@ def _expand_winners(
     so each parent appears once even when several of its children matched.
     Children without a parent (audio, flat docs) fall back to chunk-level
     neighbor-window expansion.
+
+    When ``doc_first`` (the /ask path), passages are grouped by document and
+    ordered document-by-document instead of as a flat scattered list, so the
+    synthesis model sees coherent documents. /search keeps the flat behavior.
     """
     if not hits:
         return []
     engine = _get_engine()
     with engine.connect() as conn:
+        if doc_first:
+            return _assemble_document_first(
+                hits, top_k, context_window, use_parent, conn
+            )
         if use_parent:
             return _collapse_to_parents(hits, top_k, context_window, conn)
         if context_window <= 0:
@@ -318,7 +327,8 @@ async def search_async(
     if rerank_enabled:
         hits = await rerank_mod.rerank(query, hits, top_k=len(hits))
     return await run_in_threadpool(
-        _expand_winners, hits, top_k, context_window, use_parent
+        _expand_winners, hits, top_k, context_window, use_parent,
+        config.doc_first_enabled(),
     )
 
 
@@ -375,7 +385,8 @@ async def multi_search_async(
     if rerank_enabled:
         hits = await rerank_mod.rerank(rerank_query, hits, top_k=len(hits))
     return await run_in_threadpool(
-        _expand_winners, hits, top_k, context_window, use_parent
+        _expand_winners, hits, top_k, context_window, use_parent,
+        config.doc_first_enabled(),
     )
 
 
@@ -463,6 +474,70 @@ def _collapse_to_parents(
                 results.append(
                     _chunk_result(hit, hit["content"], hit["chunk_index"], None)
                 )
+    return results
+
+
+def _assemble_document_first(
+    hits: list[dict[str, Any]],
+    top_k: int,
+    context_window: int,
+    use_parent: bool,
+    conn: Any,
+) -> list[dict[str, Any]]:
+    """Group reranked passages by document and emit them document-by-document.
+
+    Documents are ordered by their best passage (first appearance in the already
+    reranked ``hits``). Within each document, matched passages are collapsed to
+    parents (deduped) and returned in reading order. Bounded by
+    ``DOC_FIRST_MAX_DOCS`` and ``DOC_FIRST_MAX_PARENTS_PER_DOC`` and the overall
+    ``top_k`` so one big file can't dominate and the context stays sane for a
+    ~9B model. Each result carries ``doc_rank`` (1-based) for grouped synthesis.
+    """
+    max_docs = config.doc_first_max_docs()
+    max_per_doc = config.doc_first_max_parents_per_doc()
+
+    # Group by file, preserving the reranked order of first appearance.
+    doc_order: list[Any] = []
+    by_doc: dict[Any, list[dict[str, Any]]] = {}
+    for hit in hits:
+        fid = hit["file_id"]
+        if fid not in by_doc:
+            by_doc[fid] = []
+            doc_order.append(fid)
+        by_doc[fid].append(hit)
+
+    results: list[dict[str, Any]] = []
+    doc_rank = 0
+    for fid in doc_order:
+        if doc_rank >= max_docs or len(results) >= top_k:
+            break
+        seen_parents: set[Any] = set()
+        doc_results: list[tuple[int, dict[str, Any]]] = []
+        for hit in by_doc[fid]:
+            if len(doc_results) >= max_per_doc:
+                break
+            pid = hit.get("parent_chunk_id")
+            if use_parent and pid is not None and hit.get("parent_content"):
+                if pid in seen_parents:
+                    continue
+                seen_parents.add(pid)
+                result = _chunk_result(hit, hit["parent_content"], hit["chunk_index"], None)
+                result["parent_chunk_id"] = pid
+            elif context_window > 0:
+                merged, rng = _neighbor_window(conn, hit, context_window)
+                result = _chunk_result(hit, merged, hit["chunk_index"], rng)
+            else:
+                result = _chunk_result(hit, hit["content"], hit["chunk_index"], None)
+            doc_results.append((hit["chunk_index"] if hit["chunk_index"] is not None else 0, result))
+        if not doc_results:
+            continue
+        doc_rank += 1
+        doc_results.sort(key=lambda t: t[0])  # reading order within the document
+        for _, result in doc_results:
+            if len(results) >= top_k:
+                break
+            result["doc_rank"] = doc_rank
+            results.append(result)
     return results
 
 

@@ -193,6 +193,12 @@ Four changes that improve *which* chunks come back, all read-side (no re-embed):
    `moderate` / `complex`; `/ask` sizes how many chunks to retrieve+cite
    accordingly (default `8` / `20` / `40`), bounded for a ~9B synthesis model.
    Send `"adaptive_k": false` to use the request's `top_k` instead.
+5. **Document-first assembly.** `/ask` groups the reranked passages by document
+   and emits them document-by-document (in reading order) rather than as a flat
+   scattered list, so the model sees coherent documents. Bounded by
+   `DOC_FIRST_MAX_DOCS` / `DOC_FIRST_MAX_PARENTS_PER_DOC` (not "every chunk").
+   Results carry a `doc_rank`; synthesis presents sources under per-document
+   headers. `/search` is unchanged.
 
 | Variable                  | Default | Notes |
 | ------------------------- | ------- | ----- |
@@ -203,6 +209,9 @@ Four changes that improve *which* chunks come back, all read-side (no re-embed):
 | `MULTI_QUERY_ENABLED`     | `1`     | Retrieve for sub-queries too and fuse the pools. |
 | `ADAPTIVE_TOPK_ENABLED`   | `1`     | Size top_k to question complexity. |
 | `TOPK_SIMPLE` / `TOPK_MODERATE` / `TOPK_COMPLEX` | `8` / `20` / `40` | Per-complexity chunk counts. |
+| `DOC_FIRST_ASSEMBLY_ENABLED` | `1` | Group `/ask` passages by document (vs flat list). |
+| `DOC_FIRST_MAX_DOCS`      | `8`     | Max distinct documents in the assembled context. |
+| `DOC_FIRST_MAX_PARENTS_PER_DOC` | `3` | Max passages kept per document. |
 
 **Measuring it.** [`tools/scorecard.py`](tools/scorecard.py) scores whether the
 right document is retrieved, and at what rank, across a list of real questions —
@@ -237,6 +246,33 @@ python -m tools.scorecard --endpoint search  # pure retrieval, no LLM required
 | `QUERY_REWRITE_ENABLED` | `1`                              | LLM query rewriting before retrieval |
 | `HYDE_ENABLED`          | `0`                              | Add a hypothetical-answer doc to the dense query |
 | `QUERY_REWRITE_TIMEOUT` | `12`                             | Query-rewrite request timeout (s) |
+
+### Enabling the cross-encoder reranker (Fix 4)
+
+The default `RERANK_KIND=llm_score` reuses the synthesis LLM to score candidates —
+cheap, but weaker. A real cross-encoder (`bge-reranker-v2-m3`) is the single
+biggest retrieval-quality lever. Run one on the Mac and point era_mcp at it:
+
+```bash
+# On the Mac, once:
+pip install "infinity-emb[all]"
+# Start it (serves POST /rerank on :7997). Keep the Mac awake (caffeinate -di):
+era_mcp/tools/run_reranker.sh
+```
+
+Then set on era_mcp (NAS container env / `.env`):
+
+```
+RERANK_KIND=infinity
+RERANK_BASE_URL=http://<mac-lan-ip>:7997
+RERANK_MODEL=BAAI/bge-reranker-v2-m3
+```
+
+**Confirm it's actually used** (it silently falls back to RRF order if the server
+is unreachable): the `/ask` response now includes `"reranked": true` and
+`"rerank_backend": {"kind": "infinity", ...}`, and chunks carry a `rerank_score`.
+Re-run `tools/scorecard.py` before/after — expect the largest single jump in
+"right doc at rank #1–3".
 
 ## Running locally
 

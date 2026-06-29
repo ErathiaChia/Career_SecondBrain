@@ -220,3 +220,26 @@ def topk_for_complexity(complexity: str) -> int:
         "complex": int(os.environ.get("TOPK_COMPLEX", "40")),
     }
     return bands.get((complexity or "").strip().lower(), bands["moderate"])
+
+
+# --- Document-first assembly (Phase C / Step 6) ---
+# Instead of returning the top reranked passages scattered across many files,
+# group them by document, order documents by their best passage, and emit each
+# document's matched passages together in reading order -- so the synthesis model
+# sees coherent documents, not isolated paragraphs. Bounded (not "send every
+# chunk") to stay sane for a ~9B synthesis model. /ask only; /search is
+# unchanged. Toggle DOC_FIRST_ASSEMBLY_ENABLED=0 to A/B against flat ordering.
+
+def doc_first_enabled() -> bool:
+    return _flag("DOC_FIRST_ASSEMBLY_ENABLED", True)
+
+
+def doc_first_max_docs() -> int:
+    """Max distinct documents represented in the assembled context."""
+    return int(os.environ.get("DOC_FIRST_MAX_DOCS", "8"))
+
+
+def doc_first_max_parents_per_doc() -> int:
+    """Max matched passages kept per document (keeps one big file from eating
+    the whole budget)."""
+    return int(os.environ.get("DOC_FIRST_MAX_PARENTS_PER_DOC", "3"))
