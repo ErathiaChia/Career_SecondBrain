@@ -108,15 +108,18 @@ era_auditor/
 │   │   └── generate_findings.md   LLM prompt carrying the Steward identity + the
 │   │                              three audit-question gates.
 │   │
-│   └── rules/                 Human-editable YAML knowledge base:
-│       ├── customer_registry.yaml     Known customers (single source of truth).
-│       ├── project_registry.yaml      Known projects + lifecycle + initiative_type.
+│   └── rules/                 Human-editable YAML knowledge base (generic rules
+│       │                      are tracked; the PRIVATE registries live outside git
+│       │                      in <workspace>/local/auditor/rules — AUDITOR_REGISTRY_DIR —
+│       │                      and only *.example.yaml templates are committed):
+│       ├── customer_registry.example.yaml  Template: known customers.
+│       ├── project_registry.example.yaml   Template: projects + lifecycle + initiative_type.
 │       ├── initiative_types.yaml      Archetypes that decide which template applies.
 │       ├── project_templates.yaml     Canonical A/B/C stage tree.
 │       ├── naming_standards.yaml      container_names, numbering_policy, lint rules.
 │       ├── organization_rules.yaml    Root-level placement rules.
 │       ├── allowed_empty_folders.yaml Inbox/staging folders allowed to be empty.
-│       └── decision_history.yaml      Recorded architecture decisions to honor.
+│       └── decision_history.example.yaml   Template: architecture decisions to honor.
 │
 ├── tests/                     Unit tests (run with pytest):
 │   ├── test_constitution.py       Deterministic classification + false-positive filter.

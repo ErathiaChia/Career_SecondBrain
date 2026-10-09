@@ -111,7 +111,7 @@ def rrf_fts_weight() -> float:
 
 def filename_search_enabled() -> bool:
     """Also match the lexical channel against file_name + folder + file_path (not
-    just chunk body), so short queries -- acronyms ("IBF"), customer names, RFP
+    just chunk body), so short queries -- acronyms ("CL89"), customer names, RFP
     numbers -- hit the path they were filed under even when the body never spells
     them out. Disable with FILENAME_SEARCH_ENABLED=0 (e.g. if it costs too much on
     a very large corpus)."""
@@ -175,8 +175,15 @@ def llm_keep_alive() -> str:
     return os.environ.get("LLM_KEEP_ALIVE", "30m")
 
 
+def cloud_llm_optin() -> bool:
+    """Organisation policy: vault content never leaves the local network unless
+    this is explicitly switched on. Off by default; both this and
+    LLM_FALLBACK_ENABLED must be set for the OpenAI fallback to exist."""
+    return _flag("CLOUD_LLM_OPTIN", False)
+
+
 def llm_fallback_enabled() -> bool:
-    return _flag("LLM_FALLBACK_ENABLED", True)
+    return cloud_llm_optin() and _flag("LLM_FALLBACK_ENABLED", False)
 
 
 def openai_api_key() -> str:
@@ -210,6 +217,20 @@ def rerank_kind() -> str:
     """'infinity' (Infinity/TEI /rerank server), 'llm_score' (LLM-batched
     scoring, no extra server), or 'none'."""
     return os.environ.get("RERANK_KIND", "llm_score").strip().lower()
+
+
+def rerank_max_candidates() -> int:
+    """How many RRF-ordered candidates get a rerank score (brief §9: 20-50)."""
+    return int(os.environ.get("RERANK_MAX_CANDIDATES", "40"))
+
+
+def llm_rerank_batch() -> int:
+    """Candidates per llm_score prompt; small so each call fits num_ctx/max_tokens."""
+    return int(os.environ.get("LLM_RERANK_BATCH", "12"))
+
+
+def llm_rerank_doc_chars() -> int:
+    return int(os.environ.get("LLM_RERANK_DOC_CHARS", "400"))
 
 
 def rerank_base_url() -> str:
@@ -299,10 +320,9 @@ def agentic_ask_enabled() -> bool:
 
 def llm_judge_model() -> str:
     """Reasoning model for the Judge (and reused for synthesis). Runs on the Mac
-    (same endpoint/kind as the primary). Defaults to gemma4:31b-mlx. For a
-    one-model deployment, set LLM_PRIMARY_MODEL to the same value so rewrite +
-    synthesis use it too."""
-    return os.environ.get("LLM_JUDGE_MODEL", "gemma4:31b-mlx")
+    (same endpoint/kind as the primary). Defaults to the primary model so a
+    one-model deployment needs no extra setting; override with LLM_JUDGE_MODEL."""
+    return os.environ.get("LLM_JUDGE_MODEL", "").strip() or llm_primary_model()
 
 
 def agent_max_iters() -> int:

@@ -121,7 +121,7 @@ See [`docs/agentic_mcp_design.md`](docs/agentic_mcp_design.md) for the full desi
 The response adds: `route`, `confidence`, `sufficient`, `gaps`, `iterations`,
 `queries_tried`, `max_iters_reached`, and `trajectory` (the ReAct steps) — so the
 Open WebUI agent can relay partial answers, surface gaps, or ask a follow-up.
-Always degrades to reranked chunks (`degraded: true`) if the judge LLM is down.
+If the Mac LLM is down `/ask` returns **503** (`error=llm_unavailable`) when an answer was requested; `synthesize=false` still returns the reranked chunks. There is no cloud fallback (policy).
 Set `AGENTIC_ASK_ENABLED=0` for the legacy single-pass `/ask` below.
 
 > **Load the Open WebUI side too:** [`prompts/ai_secondbrain_agent.md`](prompts/ai_secondbrain_agent.md)
@@ -167,8 +167,8 @@ small reranker). The synthesis/query-rewrite LLM runs on the **M1 Max**
 
 | Condition | Result |
 | --- | --- |
-| Mac LLM down | falls back to OpenAI |
-| Mac down + no OpenAI key | `answer: null`, `degraded: true`, **reranked `chunks` still returned** |
+| Mac LLM down | **503** `llm_unavailable` (no cloud fallback — org policy); `synthesize=false` still returns chunks |
+| Rerank backend down | RRF order kept; `rerank_error` names the cause; `reranked: false` |
 | Reranker down / `RERANK_ENABLED=0` | original RRF order |
 | Query rewrite fails | original query used |
 | Graph tables empty | empty graph channels |
@@ -195,8 +195,8 @@ it on the Mac, then these endpoints light up — no era_mcp change:
 
 ```bash
 ssh mac "cd ~/GitHub/Career_SecondBrain/era_indexer && \
-  python -m career_history.cli seed-entities --folder '14. ST-Engg' && \
-  python -m career_history.cli graph-refresh --folder '14. ST-Engg' --limit 50"
+  python -m career_history.cli seed-entities --folder '14. Corp-A' && \
+  python -m career_history.cli graph-refresh --folder '14. Corp-A' --limit 50"
 ```
 
 **Trigger:** run the indexer CLI on the Mac (manually or via cron — the
@@ -239,9 +239,9 @@ Four changes that improve *which* chunks come back, all read-side (no re-embed):
    raw. This asymmetry matches the model's training. Turn off for a
    non-instruction model like `bge-m3`.
 2. **Filename / folder / path search.** The lexical (FTS) channel also matches
-   `file_name` + `folder` + `file_path`, so short queries — acronyms (`IBF`),
+   `file_name` + `folder` + `file_path`, so short queries — acronyms (`CL89`),
    customer names, RFP numbers — hit the path a file was filed under even when
-   the body never spells them out (`01_IBF` is normalized to `01 IBF`).
+   the body never spells them out (`01_CL89` is normalized to `01 CL89`).
 3. **Multi-query fusion.** `/ask` runs the rewritten query **and** the
    rewriter's sub-queries, merges the candidate pools, and reranks once against
    the original question (previously the sub-queries were generated then
@@ -289,14 +289,17 @@ python -m tools.scorecard --endpoint search  # pure retrieval, no LLM required
 | `LLM_PRIMARY_KIND`      | `ollama`                         | `ollama` or `openai_compat` (mlx_lm.server / llama.cpp) |
 | `LLM_PRIMARY_MODEL`     | `qwen3.5:9b-mlx`                 | Synthesis + query-rewrite model on the Mac |
 | `LLM_PRIMARY_TIMEOUT`   | `30`                             | Read timeout (s); connect timeout is fixed at ~3 s |
-| `LLM_FALLBACK_ENABLED`  | `1`                              | Use OpenAI when the Mac is unreachable |
+| `CLOUD_LLM_OPTIN`       | `0`                              | **Policy switch.** Must be `1` for any cloud LLM use; off = vault content never leaves the LAN |
+| `LLM_FALLBACK_ENABLED`  | `0`                              | OpenAI fallback when the Mac is unreachable (also needs `CLOUD_LLM_OPTIN=1`) |
 | `OPENAI_API_KEY`        | _(unset)_                        | Unset = fallback disabled (never required) |
 | `OPENAI_BASE_URL`       | `https://api.openai.com/v1`      | OpenAI-compatible base URL |
 | `OPENAI_MODEL`          | `gpt-4.1-mini`                   | Fallback model |
 | `LLM_MAX_TOKENS`        | `1024`                           | Max completion tokens |
 | `LLM_TEMPERATURE`       | `0.1`                            | Sampling temperature |
 | `RERANK_ENABLED`        | `1`                              | Cross-encoder rerank of the candidate pool |
-| `RERANK_KIND`           | `llm_score`                      | `infinity` (TEI server) / `llm_score` (no extra server) / `none` |
+| `RERANK_KIND`           | `llm_score` (compose: `infinity`) | `infinity` (Infinity/TEI on the Mac, recommended) / `llm_score` (batched LLM scoring) / `none` |
+| `RERANK_MAX_CANDIDATES` | `40`                             | RRF candidates that get a rerank score; the tail keeps RRF order |
+| `LLM_RERANK_BATCH`      | `12`                             | Candidates per `llm_score` prompt (keeps each call inside num_ctx) |
 | `RERANK_BASE_URL`       | `http://host.docker.internal:7997`  | Infinity/TEI endpoint (when `RERANK_KIND=infinity`) |
 | `RERANK_MODEL`          | `BAAI/bge-reranker-v2-m3`        | Reranker model name |
 | `RERANK_TIMEOUT`        | `15`                             | Rerank request timeout (s) |
@@ -304,7 +307,7 @@ python -m tools.scorecard --endpoint search  # pure retrieval, no LLM required
 | `HYDE_ENABLED`          | `0`                              | Add a hypothetical-answer doc to the dense query |
 | `QUERY_REWRITE_TIMEOUT` | `12`                             | Query-rewrite request timeout (s) |
 | `AGENTIC_ASK_ENABLED`   | `1`                              | Router + ReAct Judge loop on `/ask`; `0` = legacy single pass |
-| `LLM_JUDGE_MODEL`       | `gemma4:31b-mlx`                 | Reasoning model (Judge + synthesis) on the Mac |
+| `LLM_JUDGE_MODEL`       | _= `LLM_PRIMARY_MODEL`_          | Reasoning model (Judge + synthesis) on the Mac; defaults to the primary |
 | `AGENT_MAX_ITERS`       | `3`                              | Max Judge searches before a best-effort partial answer |
 | `AGENT_TIME_BUDGET`     | `60`                             | Whole-run wall-clock budget (s) |
 | `STRONG_RERANK_THRESHOLD` | `0.8`                          | Confidence gate (0-1): ≥ answers single-pass, < escalates to the loop |
@@ -343,12 +346,12 @@ cd era_mcp
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-export ERA_VAULT_DB_HOST=192.168.50.50
+export ERA_VAULT_DB_HOST=${NAS_HOST}
 export ERA_VAULT_DB_PORT=15432
 export ERA_VAULT_DB_NAME=era_vault
 export ERA_VAULT_DB_USER=era
 export ERA_VAULT_DB_PASSWORD=...        # required
-export OLLAMA_BASE_URL=http://192.168.50.50:11434
+export OLLAMA_BASE_URL=http://${NAS_HOST}:11434
 export EMBEDDING_MODEL=qwen3-embedding:0.6b
 
 python -m era_mcp            # or: python -m era_mcp.server
@@ -379,7 +382,7 @@ docker compose up -d --build
 
 [`docker-compose.yml`](docker-compose.yml) only manages this container; Postgres
 and Ollama run as separate existing NAS containers, reached over their published
-ports (e.g. DB on `192.168.50.50:15432`, Ollama on `192.168.50.50:11434`).
+ports (e.g. DB on `${NAS_HOST}:15432`, Ollama on `${NAS_HOST}:11434`).
 Adjust the `environment` block and the `../.env` file for your setup. The
 container publishes port `8808`.
 

@@ -159,17 +159,15 @@ def wait_for_db(timeout=60):
 
 
 def apply_schema(conn, repo_root: str):
+    """schema.sql plus EVERY forward migration in order (rollbacks excluded), so
+    the harness always matches what `career_history.cli migrate` applies."""
     base = os.path.join(repo_root, "era_indexer")
-    files = [
-        os.path.join(base, "schema.sql"),
-        *[os.path.join(base, "migrations", f) for f in (
-            "0001_v2_foundation.sql",
-            "0002_graph_snapshots.sql",
-            "0003_v3_knowledge_os.sql",
-            "0004_embeddings_1024_parent_chunks.sql",
-            "0005_knowledge_facts.sql",
-        )],
-    ]
+    migrations = sorted(
+        f for f in os.listdir(os.path.join(base, "migrations"))
+        if f[:4].isdigit() and f.endswith(".sql") and not f.endswith(".rollback.sql")
+    )
+    files = [os.path.join(base, "schema.sql"),
+             *[os.path.join(base, "migrations", f) for f in migrations]]
     with conn.cursor() as cur:
         for f in files:
             with open(f) as fh:
@@ -216,18 +214,18 @@ def seed(conn):
                     "VALUES (%s,%s,%s,%s::vector, to_tsvector('simple', %s), %s::jsonb, %s)",
                     (file_id, i, content, vec_literal(embed_text(content)), content, meta, parent_id),
                 )
-        # Structural test: nested project folders under a top-level "14. ST-Engg".
+        # Structural test: nested project folders under a top-level "14. Corp-A".
         # file_registry rows only — the structural branch reads paths, not chunks.
         for p in (
-            "/vault/14. ST-Engg/01 Project/2026/16_HC3/00-README.md",
-            "/vault/14. ST-Engg/01 Project/2026/16_HC3/A.2. Proposal/p.pdf",
-            "/vault/14. ST-Engg/01 Project/2026/11_Thailand/A.2. Proposal/t.xlsx",
-            "/vault/14. ST-Engg/01 Project/2026/01_IBF/rfp.pdf",
-            "/vault/14. ST-Engg/01 Project/2026/loose.md",  # directly in 2026 → not a project
+            "/vault/14. Corp-A/01 Project/2026/16_CL91/00-README.md",
+            "/vault/14. Corp-A/01 Project/2026/16_CL91/A.2. Proposal/p.pdf",
+            "/vault/14. Corp-A/01 Project/2026/11_Thailand/A.2. Proposal/t.xlsx",
+            "/vault/14. Corp-A/01 Project/2026/01_CL89/rfp.pdf",
+            "/vault/14. Corp-A/01 Project/2026/loose.md",  # directly in 2026 → not a project
         ):
             cur.execute(
                 "INSERT INTO file_registry (file_path, file_name, file_type, file_hash, folder, is_audio) "
-                "VALUES (%s,%s,'md','h','14. ST-Engg',false)",
+                "VALUES (%s,%s,'md','h','14. Corp-A',false)",
                 (p, p.rsplit("/", 1)[1]),
             )
 
@@ -329,12 +327,18 @@ def main():
     check("/knowledge/search entities non-empty", len(ks.get("entities", [])) > 0)
     check("/knowledge/search relationships non-empty", len(ks.get("relationships", [])) > 0)
 
-    print("\nT5 — graceful degradation (Mac LLM down, no OpenAI)")
+    print("\nT5 — local-first: Mac LLM down is a loud 503, never a cloud fallback")
     os.environ["LLM_PRIMARY_BASE_URL"] = "http://127.0.0.1:9"  # dead
-    d = client.post("/ask", json={"query": q, "top_k": 5}).json()
-    check("degraded=true", d.get("degraded") is True, detail=str(d.get("degraded_reason")))
-    check("answer is null when LLM down", d.get("answer") is None)
-    check("chunks STILL returned (degrade to retrieval)", len(d.get("chunks", [])) > 0)
+    os.environ["OPENAI_API_KEY"] = "sk-must-never-be-used"      # key present, no opt-in
+    resp = client.post("/ask", json={"query": q, "top_k": 5})
+    body = resp.json()
+    check("HTTP 503 when synthesis is requested", resp.status_code == 503, detail=str(resp.status_code))
+    check("error=llm_unavailable", (body.get("detail") or {}).get("error") == "llm_unavailable")
+    check("fallback reported disabled (policy)",
+          ((body.get("detail") or {}).get("provider") or {}).get("fallback") == "disabled (policy)")
+    d = client.post("/ask", json={"query": q, "top_k": 5, "synthesize": False}).json()
+    check("synthesize=false still returns chunks", len(d.get("chunks", [])) > 0)
+    os.environ.pop("OPENAI_API_KEY", None)
     os.environ["LLM_PRIMARY_BASE_URL"] = stub_url
 
     print("\nT6 — parent-child expansion")
@@ -344,19 +348,19 @@ def main():
 
     print("\nT7 — structural inventory (census, not semantic search)")
     inv = client.get("/structure/folders",
-                     params={"question": "list all projects under ST-Engg 01 Project 2026"}).json()
+                     params={"question": "list all projects under Corp-A 01 Project 2026"}).json()
     names = {f["name"] for f in inv.get("folders", [])}
-    check("structural lists the 3 projects", {"16_HC3", "11_Thailand", "01_IBF"} <= names, detail=str(names))
+    check("structural lists the 3 projects", {"16_CL91", "11_Thailand", "01_CL89"} <= names, detail=str(names))
     check("structural excludes the loose file", "loose.md" not in names)
     check("structural count is 3", inv.get("count") == 3, detail=str(inv.get("count")))
     inv2 = client.get("/structure/folders",
-                      params={"prefix": "/vault/14. ST-Engg/01 Project/2026/"}).json()
+                      params={"prefix": "/vault/14. Corp-A/01 Project/2026/"}).json()
     check("structural by explicit prefix == 3", inv2.get("count") == 3, detail=str(inv2.get("count")))
     ov = client.get("/structure/overview").json()
     check("folder overview is non-empty text", bool(ov.get("overview")))
 
     print("\nT8 — agentic routes a census question to the structural tool")
-    ar = client.post("/ask", json={"query": "how many projects are under ST-Engg 2026?"}).json()
+    ar = client.post("/ask", json={"query": "how many projects are under Corp-A 2026?"}).json()
     check("route == structural", ar.get("route") == "structural", detail=str(ar.get("route")))
     check("structural answer states the count (3)", "3" in (ar.get("answer") or ""))
 

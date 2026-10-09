@@ -4,18 +4,18 @@
   "questions": [
     {
       "id": "ibf-latest",
-      "query": "what's the latest on IBF?",
-      "expect_path_contains": ["01_IBF", "Institute of Banking and Finance"]
+      "query": "what's the latest on CL89?",
+      "expect_path_contains": ["01_CL89", "Acme10 Orion Vega"]
     },
     {
       "id": "ibf-rfp",
-      "query": "IBF programme accreditation AI agents RFP",
-      "expect_path_contains": ["rfp-tdt-2025-0006", "01_IBF"]
+      "query": "CL89 programme accreditation AI agents RFP",
+      "expect_path_contains": ["rfp-tdt-2025-0006", "01_CL89"]
     },
     {
       "id": "list-projects",
-      "query": "list all projects under ST-Engg 2026",
-      "expect_path_contains": ["01_IBF"]
+      "query": "list all projects under Corp-A 2026",
+      "expect_path_contains": ["01_CL89"]
     },
     {
       "id": "acronym-lookup",

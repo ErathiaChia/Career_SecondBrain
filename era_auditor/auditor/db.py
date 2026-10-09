@@ -32,9 +32,8 @@ class AuditorDatabase:
         self.sync_registries_from_yaml()
 
     def sync_registries_from_yaml(self) -> None:
-        rules_dir = self.config.base_dir / "auditor" / "rules"
-        customer_registry_path = rules_dir / "customer_registry.yaml"
-        project_registry_path = rules_dir / "project_registry.yaml"
+        customer_registry_path = self.config.registry_path("customer_registry.yaml")
+        project_registry_path = self.config.registry_path("project_registry.yaml")
         if customer_registry_path.exists():
             data = yaml.safe_load(customer_registry_path.read_text(encoding="utf-8")) or {}
             for code, customer in data.get("customers", {}).items():

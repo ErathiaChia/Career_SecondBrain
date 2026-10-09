@@ -129,7 +129,7 @@ cd era_auditor && python -m auditor.cli manifest export   # neutral project mani
 cd ../era_indexer && python -m career_history.cli monitor  # projects -> changes -> conflicts -> state -> digest
 ```
 
-Then ask the Open WebUI agent things like "brief me on IBF", "what changed this
+Then ask the Open WebUI agent things like "brief me on CL89", "what changed this
 week", or "prep me for the HLB meeting with Alice". The `/projects/*` tools are
 listed in [`era_mcp/README.md`](era_mcp/README.md#project-intelligence).
 
@@ -145,12 +145,41 @@ python -m auditor.cli report latest
 
 ```text
 Career_SecondBrain/
-├── .env.example          Shared secrets template (DB, OpenAI)
+├── .env.example          Shared config template (hosts, DB, policy switches)
 ├── era_indexer/          Write pipeline (package: career_history)
 ├── era_mcp/              Read API server + Docker deploy
 ├── era_auditor/          Knowledge Steward agent
-└── era_graph_web/        Graph viewer (built into era_mcp image)
+├── era_graph_web/        Graph viewer (built into era_mcp image)
+├── docs/                 models.md + ADRs (docs/adr/)
+└── local/                GIT-IGNORED private data (see below)
 ```
+
+## Private data, local-first policy and tests
+
+Organisation policy: nothing sensitive (client/project names, vault content)
+goes to a cloud service. Concretely:
+
+- **No cloud LLM.** `CLOUD_LLM_OPTIN=0` (default) disables the OpenAI fallback
+  in `era_mcp` and the auditor's cloud client; when the Mac LLM is unreachable
+  `/ask` returns 503 rather than calling out. See `docs/adr/0001-local-only-llm.md`.
+- **`local/` is never committed.** It holds the auditor registries
+  (`local/auditor/rules/*.yaml`, pointed to by `AUDITOR_REGISTRY_DIR`), auditor
+  reports, eval question sets and runs, and the target brief. Templates with
+  synthetic names are committed as `*.example.yaml`.
+- **Docs and tests use synthetic names** (`CL89`, `Acme Bank`, `Corp-A`, ...);
+  `era_auditor/tests/fixtures/registries/` are scrubbed copies of the real
+  registries so unit tests never read real data.
+- Hosts are `${NAS_HOST}` / `${MAC_HOST}` from `.env`; no IPs in git.
+
+Tests (no DB, no LLM; ~200 cases across the three packages):
+
+```bash
+make test
+```
+
+Per package: `make test-mcp`, `make test-indexer`, `make test-auditor`. The
+integration harness (`make test-integration`) needs Docker. `make check-models`
+verifies the configured model tags on the runtime Mac (`docs/models.md`).
 
 ## NAS Docker deployment notes
 
@@ -158,7 +187,7 @@ This repository is developed locally and pushed to GitHub. A sanitized working
 copy can also be synced to the Synology NAS for Docker-based services.
 
 Current local paths:
-- Local repo: `/Users/erathiachia/GitHub/Career_SecondBrain`
+- Local repo: `~/GitHub/Career_SecondBrain`
 - NAS mount: `/Volumes/homes/Erathia`
 - NAS Docker mirror: `/Volumes/docker/Career_SecondBrain`
 
@@ -184,7 +213,7 @@ rsync -avhn --delete \
   --exclude ".DS_Store" \
   --exclude "*.tsbuildinfo" \
   --exclude "*.tar.gz" \
-  /Users/erathiachia/GitHub/Career_SecondBrain/ \
+  ~/GitHub/Career_SecondBrain/ \
   /Volumes/homes/Erathia/Career/Career_SecondBrain/
 ```
 

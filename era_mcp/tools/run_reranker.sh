@@ -18,7 +18,7 @@
 #
 # Wire era_mcp to it (env on the NAS container / .env), pointing at the Mac:
 #     RERANK_KIND=infinity
-#     RERANK_BASE_URL=http://<mac-lan-ip>:7997      # e.g. http://192.168.50.x:7997
+#     RERANK_BASE_URL=http://<mac-lan-ip>:7997      # e.g. http://${MAC_LAN_HOST}:7997
 #     RERANK_MODEL=BAAI/bge-reranker-v2-m3
 #
 # Verify it is actually being used: POST /ask and check the response's

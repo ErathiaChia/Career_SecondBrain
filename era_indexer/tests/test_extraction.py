@@ -38,17 +38,17 @@ def test_split_windows_returns_all_text_when_under_cap():
 
 
 def test_merge_extractions_dedupes_across_windows():
-    a = {"entities": [{"name": "IBF", "type": "project", "confidence": 0.5, "aliases": ["01_IBF"]}],
-         "relationships": [{"source": "Ron", "type": "OWNS", "target": "IBF"}],
+    a = {"entities": [{"name": "CL89", "type": "project", "confidence": 0.5, "aliases": ["01_CL89"]}],
+         "relationships": [{"source": "Ron", "type": "OWNS", "target": "CL89"}],
          "facts": [{"kind": "decision", "statement": "Use Gemini"}]}
-    b = {"entities": [{"name": "ibf", "type": "project", "confidence": 0.9, "aliases": ["IBF Programme"]}],
-         "relationships": [{"source": "ron", "type": "owns", "target": "ibf"}],
+    b = {"entities": [{"name": "cl89", "type": "project", "confidence": 0.9, "aliases": ["CL89 Programme"]}],
+         "relationships": [{"source": "ron", "type": "owns", "target": "cl89"}],
          "facts": [{"kind": "decision", "statement": "use gemini"},
                    {"kind": "risk", "statement": "GCC unconfirmed"}]}
     merged = graph.merge_extractions([a, b])
     assert len(merged["entities"]) == 1
     assert merged["entities"][0]["confidence"] == 0.9
-    assert set(merged["entities"][0]["aliases"]) == {"01_IBF", "IBF Programme"}
+    assert set(merged["entities"][0]["aliases"]) == {"01_CL89", "CL89 Programme"}
     assert len(merged["relationships"]) == 1
     assert len(merged["facts"]) == 2
 

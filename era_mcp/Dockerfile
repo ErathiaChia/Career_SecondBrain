@@ -17,8 +17,12 @@ COPY era_mcp/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY era_mcp/era_mcp/ era_mcp/
+# Judge / synthesis / agent prompts live beside the package (agent.py resolves
+# <pkg>/../prompts); without this COPY the container silently ran on the short
+# inline fallback prompts.
+COPY era_mcp/prompts/ prompts/
 COPY --from=graph-web /graph-web/dist era_graph_web/dist
-RUN python -c "import era_mcp.server"
+RUN python -c "import era_mcp.server; from era_mcp import agent; agent.assert_prompts_loaded()"
 
 EXPOSE 8808
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from auditor.config import load_config
+from tests._cfg import auditor_config
 from auditor.constitution import FolderConstitution
 from auditor.findings import FindingsGenerator
 from auditor.models import AuditFinding, FolderRecord
@@ -14,9 +14,9 @@ def folder_record(folder_id: int, path: str, file_count: int = 0, child_count: i
     depth = 0 if path == "." else len(path.split("/"))
     return FolderRecord(
         id=folder_id,
-        root_path="/Volumes/homes/Erathia/Career/14. ST-Engg",
+        root_path="/Volumes/homes/Erathia/Career/14. Corp-A",
         path=path,
-        absolute_path=f"/Volumes/homes/Erathia/Career/14. ST-Engg/{path}",
+        absolute_path=f"/Volumes/homes/Erathia/Career/14. Corp-A/{path}",
         parent_path=parent,
         depth=depth,
         file_count=file_count,
@@ -31,7 +31,7 @@ def folder_record(folder_id: int, path: str, file_count: int = 0, child_count: i
 class ConstitutionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.config = load_config("config.yaml")
+        cls.config = auditor_config()
         cls.constitution = FolderConstitution(cls.config)
 
     def test_top_level_project_is_root(self) -> None:
@@ -62,19 +62,19 @@ class ConstitutionTests(unittest.TestCase):
         # Single-initiative customers register the customer FOLDER as the
         # initiative (stage tree sits directly under it), so it classifies as
         # an initiative carrying the customer identity.
-        classification = self.constitution.classify_deterministic(folder_record(4, "01 Project/2026/07_MY_MOH"))
+        classification = self.constitution.classify_deterministic(folder_record(4, "01 Project/2026/07_CL83"))
         self.assertIsNotNone(classification)
         self.assertEqual(classification.folder_type, "initiative")
-        self.assertEqual(classification.customer_code, "MY_MOH")
+        self.assertEqual(classification.customer_code, "CL83")
         self.assertEqual(classification.classification_source, "project_registry")
 
     def test_project_registry_enriches_initiative(self) -> None:
         classification = self.constitution.classify_deterministic(
-            folder_record(7, "01 Project/2026/01_IBF/1 AI Staff Training")
+            folder_record(7, "01 Project/2026/01_CL89/1 Acme50 Orion Vega")
         )
         self.assertIsNotNone(classification)
         self.assertEqual(classification.folder_type, "initiative")
-        self.assertEqual(classification.registry_project_id, "2026-IBF-AI-STAFF-TRAINING")
+        self.assertEqual(classification.registry_project_id, "2026-CL89-AI-STAFF-TRAINING")
         self.assertEqual(classification.classification_source, "project_registry")
 
     def test_unknown_project_year_child_is_customer_not_initiative(self) -> None:
@@ -88,7 +88,7 @@ class ConstitutionTests(unittest.TestCase):
 
     def test_stage_folder_resolves(self) -> None:
         classification = self.constitution.classify_deterministic(
-            folder_record(5, "01 Project/2026/01_IBF/1 AI Staff Training/A.2. Proposal")
+            folder_record(5, "01 Project/2026/01_CL89/1 Acme50 Orion Vega/A.2. Proposal")
         )
         self.assertIsNotNone(classification)
         self.assertEqual(classification.folder_type, "stage")
@@ -99,8 +99,8 @@ class ConstitutionTests(unittest.TestCase):
             folder_record(1, "01 Project", child_count=1),
             folder_record(2, "00 Agent Inbox"),
             folder_record(3, "01 Project/2026"),
-            folder_record(4, "01 Project/2026/07_MY_MOH"),
-            folder_record(5, "01 Project/2026/01_IBF/1 AI Staff Training/A.2. Proposal"),
+            folder_record(4, "01 Project/2026/07_CL83"),
+            folder_record(5, "01 Project/2026/01_CL89/1 Acme50 Orion Vega/A.2. Proposal"),
         ]
         classifications = {
             folder.id: self.constitution.classify_deterministic(folder)
@@ -135,7 +135,7 @@ class ConstitutionTests(unittest.TestCase):
                 reasoning="Bad generic finding.",
             ),
             AuditFinding(
-                folder_path="01 Project/2026/07_MY_MOH",
+                folder_path="01 Project/2026/07_CL83",
                 issue_type="unclear_name",
                 severity="low",
                 confidence=0.4,
@@ -143,7 +143,7 @@ class ConstitutionTests(unittest.TestCase):
                 reasoning="Bad generic finding.",
             ),
             AuditFinding(
-                folder_path="01 Project/2026/01_IBF/1 AI Staff Training/A.2. Proposal",
+                folder_path="01 Project/2026/01_CL89/1 Acme50 Orion Vega/A.2. Proposal",
                 issue_type="duplicate_topic",
                 severity="low",
                 confidence=0.68,

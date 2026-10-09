@@ -3,7 +3,7 @@ from datetime import datetime
 from career_history import project_state as ps
 
 NOW = datetime(2026, 10, 5)
-PROJECT = {"id": 1, "name": "IBF Portal", "client": "IBF", "status": "ACTIVE",
+PROJECT = {"id": 1, "name": "CL89 Portal", "client": "CL89", "status": "ACTIVE",
            "project_type": "delivery", "owner": None, "last_activity": datetime(2026, 9, 30)}
 
 

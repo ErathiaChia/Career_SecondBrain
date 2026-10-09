@@ -1,0 +1,106 @@
+version: 1
+
+# Customer registry: the single source of truth for known customers.
+#
+# Keys MUST equal the folder-derived code produced by
+# FolderConstitution.customer_code() / relaxed_customer_code():
+#   "02_Seg78"            -> CL71
+#   "12_CL87 - Eye Clinic"      -> CL56  (spaces -> underscores)
+#   "20_Seg86" -> TEMASEKPOLY_SMARTCONTRACT
+# so known_customer() resolves the folder to this entry at high confidence.
+#
+# NOTE: CL83.full_name is test-pinned (tests/test_constitution.py:58-59).
+
+customers:
+  CL89:
+    full_name: Acme10 Orion Vega
+    industry: Financial Services
+    country: Singapore
+  CL71:
+    full_name: Delta47 Sigma Rho
+    industry: Financial Services
+    country: Malaysia
+  CL75:
+    full_name: Zenith55 Atlas Delta
+    industry: Banking
+    country: Malaysia
+  CL88:
+    full_name: Sigma78 Rho
+    industry: Financial Services
+    country: Singapore
+  CL82:
+    full_name: Lyra3 Nova Zenith
+    industry: Education
+    country: Singapore
+  CL76:
+    full_name: Nova74 Zenith
+    industry: Manufacturing
+    country: Singapore
+  CL83:
+    full_name: Sigma18 Rho Acme
+    industry: Healthcare
+    country: Malaysia
+  CL85:
+    full_name: Rho9 Acme Orion
+    industry: Healthcare
+    country: Singapore
+  CL58:
+    full_name: Zenith5 Atlas Delta
+    industry: Healthcare
+    country: Singapore
+  CL94:
+    full_name: Rho29 Acme Orion
+    industry: Media
+    country: Singapore
+  CL38:
+    full_name: Lyra33 Nova Zenith
+    industry: Telecommunications
+    country: Thailand
+  CL56:
+    full_name: Delta7 Sigma Rho
+    industry: Healthcare
+    country: Singapore
+  CL79:
+    full_name: Client80
+    industry: Technology Services
+    country: India
+  CL81:
+    full_name: Lyra13 Nova Zenith
+    industry: Hospitality
+    country: Singapore
+  CL91:
+    full_name: Orion1 Vega Lyra
+    industry: Healthcare
+    country: Singapore
+  CL92:
+    full_name: Delta27 Sigma Rho
+    industry: Healthcare
+    country: Singapore
+  CL62:
+    full_name: Rho59 Acme
+    industry: Healthcare
+    country: Singapore
+  CL72:
+    full_name: Zenith65 Atlas
+    industry: Manufacturing
+    country: Japan
+  CL95:
+    full_name: Rho49 Acme
+    industry: Education
+    country: Singapore
+  CL87:
+    full_name: Atlas36 Delta Sigma
+    industry: Healthcare
+    country: Singapore
+  CL86:
+    full_name: Nova4 Zenith Atlas
+    industry: Healthcare
+    country: Singapore
+  CL90:
+    full_name: Orion21 Vega Lyra
+    industry: Government
+    country: Singapore
+  CL93:
+    full_name: Orion61 Vega
+    industry: Healthcare
+    country: Malaysia

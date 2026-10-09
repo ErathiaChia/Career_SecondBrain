@@ -12,37 +12,37 @@ def _file(fid, path, name=None, days_ago=10):
 
 def test_longest_fragment_wins_between_manifest_and_seed():
     manifest = projects.candidates_from_manifest([{
-        "path": "01 Project/2026/01_IBF/1 AI Staff Training", "name": "AI Staff Training",
-        "project_key": "2026-IBF-AI", "customer_name": "IBF", "lifecycle": "active_presales",
+        "path": "01 Project/2026/01_CL89/1 Acme50 Orion Vega", "name": "Acme50 Orion Vega",
+        "project_key": "2026-CL89-AI", "customer_name": "CL89", "lifecycle": "active_presales",
     }])
     files = [
-        _file(1, "/V/14. ST-Engg/01 Project/2026/01_IBF/1 AI Staff Training/rfp.pdf"),
-        _file(2, "/V/14. ST-Engg/01 Project/2026/01_IBF/notes.md"),
-        _file(3, "/V/14. ST-Engg/01 Project/2026/16_HC3/a/deck.pptx"),
-        _file(4, "/V/14. ST-Engg/02 Ops/x.md"),
+        _file(1, "/V/14. Corp-A/01 Project/2026/01_CL89/1 Acme50 Orion Vega/rfp.pdf"),
+        _file(2, "/V/14. Corp-A/01 Project/2026/01_CL89/notes.md"),
+        _file(3, "/V/14. Corp-A/01 Project/2026/16_CL91/a/deck.pptx"),
+        _file(4, "/V/14. Corp-A/02 Ops/x.md"),
     ]
     seed = projects.candidates_from_seed([f["file_path"] for f in files], ["/01 Project/2026/"])
     assigned = projects.assign_files(files, manifest + seed)
-    assert [f["file_id"] for f in assigned["2026-IBF-AI"]] == [1]
-    assert [f["file_id"] for f in assigned["path:01 Project/2026/01_IBF"]] == [2]
-    assert [f["file_id"] for f in assigned["path:01 Project/2026/16_HC3"]] == [3]
+    assert [f["file_id"] for f in assigned["2026-CL89-AI"]] == [1]
+    assert [f["file_id"] for f in assigned["path:01 Project/2026/01_CL89"]] == [2]
+    assert [f["file_id"] for f in assigned["path:01 Project/2026/16_CL91"]] == [3]
     assert all(4 not in [f["file_id"] for f in v] for v in assigned.values())
 
 
 def test_seed_candidate_names_strip_numeric_prefix():
-    seed = projects.candidates_from_seed(["/V/01 Project/2026/16_HC3/a.md"], ["/01 Project/2026/"])
-    assert seed[0].name == "HC3"
-    assert "16_HC3" in seed[0].aliases
+    seed = projects.candidates_from_seed(["/V/01 Project/2026/16_CL91/a.md"], ["/01 Project/2026/"])
+    assert seed[0].name == "CL91"
+    assert "16_CL91" in seed[0].aliases
 
 
 def test_build_project_prefers_manifest_fields():
     cand = projects.candidates_from_manifest([{
         "path": "01 Project/2026/02_HLB", "name": "HLB Credit AI", "project_key": "HLB-1",
-        "customer_name": "Hong Leong Bank", "initiative_type": "poc", "status": "active",
+        "customer_name": "Zenith55 Atlas Delta", "initiative_type": "poc", "status": "active",
         "lifecycle": "active_presales", "metadata": {"owner": "Era"},
     }])[0]
     p = projects.build_project(cand, [_file(1, "/x/01 Project/2026/02_HLB/a.pdf", days_ago=400)], NOW)
-    assert p["client"] == "Hong Leong Bank"
+    assert p["client"] == "Zenith55 Atlas Delta"
     assert p["project_type"] == "poc"
     assert p["status"] == "ACTIVE"  # manifest beats recency
     assert p["owner"] == "Era"

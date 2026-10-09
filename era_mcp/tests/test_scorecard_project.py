@@ -1,19 +1,19 @@
 from tools import scorecard as sc
 
 API = {
-    "/projects/IBF": {"client": "IBF", "status": "DORMANT", "project_type": "proposal"},
-    "/projects/IBF/entities": {"entities": [{"canonical_name": "DBS", "aliases": ["Development Bank"]},
+    "/projects/CL89": {"client": "CL89", "status": "DORMANT", "project_type": "proposal"},
+    "/projects/CL89/entities": {"entities": [{"canonical_name": "CL88", "aliases": ["Development Bank"]},
                                             {"canonical_name": "Kafka", "aliases": []}]},
-    "/projects/IBF/facts": {"facts": [{"statement": "Host the portal on Azure", "source_quote": "use Azure"}]},
-    "/projects/IBF/conflicts": {"conflicts": [{"fact_a": "Go-live 1 Nov", "fact_b": "Go-live 15 Dec",
+    "/projects/CL89/facts": {"facts": [{"statement": "Host the portal on Azure", "source_quote": "use Azure"}]},
+    "/projects/CL89/conflicts": {"conflicts": [{"fact_a": "Go-live 1 Nov", "fact_b": "Go-live 15 Dec",
                                                "explanation": "dates differ"}]},
-    "/projects/IBF/documents": {"families": [{"family_key": "ibf proposal", "latest": "IBF Proposal v3.docx",
-                                              "versions": [{"file_name": "IBF Proposal v2.docx"},
-                                                           {"file_name": "IBF Proposal v3.docx"}]}]},
-    "/projects/IBF/stale": {"stale": [{"statement": "Go-live 1 Nov"}]},
-    "/projects/IBF/state": {"state": {"phase": {"value": "build"},
+    "/projects/CL89/documents": {"families": [{"family_key": "ibf proposal", "latest": "CL89 Proposal v3.docx",
+                                              "versions": [{"file_name": "CL89 Proposal v2.docx"},
+                                                           {"file_name": "CL89 Proposal v3.docx"}]}]},
+    "/projects/CL89/stale": {"stale": [{"statement": "Go-live 1 Nov"}]},
+    "/projects/CL89/state": {"state": {"phase": {"value": "build"},
                                       "blockers": {"value": [{"statement": "Vendor API delay"}]}}},
-    "/projects/IBF/brief": {"markdown": "## Brief\n- a [F1, x]\n- b [F2, y]\n- c\n"},
+    "/projects/CL89/brief": {"markdown": "## Brief\n- a [F1, x]\n- b [F2, y]\n- c\n"},
 }
 
 
@@ -22,11 +22,11 @@ def fetch(path, params):
 
 
 def _run(check):
-    return sc.score_check({"project": "IBF", **check}, fetch)
+    return sc.score_check({"project": "CL89", **check}, fetch)
 
 
 def test_project_fields_partial():
-    r = _run({"type": "project_fields", "expect": {"client": "IBF", "status": "ACTIVE"}})
+    r = _run({"type": "project_fields", "expect": {"client": "CL89", "status": "ACTIVE"}})
     assert r["score"] == 0.5 and "status" in r["detail"][0]
 
 

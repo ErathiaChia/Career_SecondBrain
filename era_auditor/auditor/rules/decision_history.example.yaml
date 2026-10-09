@@ -1,0 +1,6 @@
+# Template for the PRIVATE decision history (architecture decisions the auditor
+# must honour, plus finding-suppression patterns). Copy to
+#   <workspace>/local/auditor/rules/decision_history.yaml
+version: 1
+decisions: []
+suppression_patterns: []

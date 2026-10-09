@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from auditor.config import load_config
+from tests._cfg import auditor_config
 from auditor.constitution import FolderConstitution
 from auditor.name_lint import NameLinter
 from auditor.template_diff import (
@@ -62,19 +62,19 @@ class ParseStageNameTests(unittest.TestCase):
     def test_rejects_plain_names(self) -> None:
         self.assertIsNone(parse_stage_name("Resources"))
         self.assertIsNone(parse_stage_name("2026"))
-        self.assertIsNone(parse_stage_name("01_IBF"))
+        self.assertIsNone(parse_stage_name("01_CL89"))
 
 
 class TemplateDifferTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         constitution = FolderConstitution(config)
         cls.differ = TemplateDiffer(constitution.project_templates)
         cls.naming_standards = constitution.naming_standards
 
     def test_hongleong_index_collision_suggests_renumber(self) -> None:
-        base = "01 Project/2026/03_HongLeong"
+        base = "01 Project/2026/03_Seg79"
         by_path, children = make_tree(
             [
                 base,
@@ -90,7 +90,7 @@ class TemplateDifferTests(unittest.TestCase):
         self.assertIn("A.2.6. Proposal", renumber[0].suggested_destination)
 
     def test_musimmas_wrong_letter_nesting_is_flagged(self) -> None:
-        base = "01 Project/2026/06_MusimMas"
+        base = "01 Project/2026/06_Seg80"
         by_path, children = make_tree(
             [
                 base,
@@ -110,7 +110,7 @@ class TemplateDifferTests(unittest.TestCase):
         self.assertIn("B. Delivery", wrong_letter[0].suggested_destination)
 
     def test_alias_spelling_suggests_standardize(self) -> None:
-        base = "01 Project/2026/07_MY_MOH"
+        base = "01 Project/2026/07_CL83"
         by_path, children = make_tree([base, f"{base}/A.1. RFI.RFP.RFQ"])
         findings = self.differ.diff_initiative(base, by_path, children, enforce_core=False)
         standardize = [f for f in findings if f.suggested_action == "standardize"]
@@ -118,7 +118,7 @@ class TemplateDifferTests(unittest.TestCase):
         self.assertEqual(standardize[0].suggested_destination, "A.1. RFI_RFP_RFQ")
 
     def test_ibf_silent_renumbering_is_flagged(self) -> None:
-        base = "01 Project/2026/01_IBF/6 Transformation"
+        base = "01 Project/2026/01_CL89/6 Transformation"
         by_path, children = make_tree(
             [
                 base,
@@ -140,7 +140,7 @@ class TemplateDifferTests(unittest.TestCase):
         )
 
     def test_extension_folders_with_matching_letter_are_allowed(self) -> None:
-        base = "01 Project/2026/12_TTSH"
+        base = "01 Project/2026/12_CL87"
         by_path, children = make_tree(
             [
                 base,
@@ -153,7 +153,7 @@ class TemplateDifferTests(unittest.TestCase):
         self.assertEqual(flagged, [])
 
     def test_missing_core_stage_reported_when_enforced(self) -> None:
-        base = "01 Project/2026/05_ITE_AMK"
+        base = "01 Project/2026/05_CL82"
         by_path, children = make_tree([base, f"{base}/A.1. RFI_RFP_RFQ"])
         findings = self.differ.diff_initiative(base, by_path, children, enforce_core=True)
         completeness = [f for f in findings if f.issue_type == "project_completeness"]
@@ -161,8 +161,8 @@ class TemplateDifferTests(unittest.TestCase):
         self.assertIn("A.2. Proposal", completeness[0].suggested_destination)
 
     def test_leads_are_not_required_to_have_template(self) -> None:
-        base = "01 Project/2026/08_NUHS"
-        by_path, children = make_tree([base, f"{base}/01Oct2025 - NUHS"])
+        base = "01 Project/2026/08_CL85"
+        by_path, children = make_tree([base, f"{base}/01Oct2025 - CL85"])
         findings = self.differ.diff_initiative(base, by_path, children, enforce_core=False)
         self.assertEqual(findings, [])
 
@@ -170,7 +170,7 @@ class TemplateDifferTests(unittest.TestCase):
 class NameLinterTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         constitution = FolderConstitution(config)
         cls.linter = NameLinter(constitution.naming_standards)
 

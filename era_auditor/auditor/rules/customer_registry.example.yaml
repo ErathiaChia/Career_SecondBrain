@@ -1,0 +1,14 @@
+# Template for the PRIVATE customer registry. Copy to
+#   <workspace>/local/auditor/rules/customer_registry.yaml
+# (git-ignored; override the location with AUDITOR_REGISTRY_DIR). Keys are the
+# folder-derived customer codes used in vault paths.
+version: 1
+customers:
+  ACME:
+    full_name: "Acme Bank"
+    industry: "Banking"
+    country: "SG"
+  ORION:
+    full_name: "Orion Logistics"
+    industry: "Logistics"
+    country: "SG"

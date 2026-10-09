@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 _LABEL = re.compile(r"(?:^|\n|[-*•]\s*|\.\s+)\**\s*(FACT|INFERENCE|UNKNOWN)\s*\**\s*:\s*\**\s*(.+?)(?=\n|$)")
-_CITE = re.compile(r"\[(\d+)\]")
+# Accepts passage citations "[3]" and fact citations "[F12]" / "[F12, plan.docx]".
+_CITE = re.compile(r"\[(?:\d+|F\d+(?:\s*,[^\]]*)?)\]")
 
 
 def parse(answer: str | None) -> dict[str, Any]:

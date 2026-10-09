@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-off ST-Engg vault fact extraction (local Ollama on the Mac), folder by folder,
+# One-off Corp-A vault fact extraction (local Ollama on the Mac), folder by folder,
 # rebuilding project state after the high-value folders so results land early.
 # Resumable: extract-documents skips files already at the current extractor version,
 # so re-running this script continues where it stopped.
@@ -37,8 +37,8 @@ for f in "02 Ops" "00 Agent Inbox" "03 Product" "04 Resources" "05 Admin" "."; d
 done
 rebuild
 
-# VisionTech folders (01 Ops, 03 Presales PrepWork, 06 Administrative, 04 Product,
+# PriorCo folders (01 Ops, 03 Presales PrepWork, 06 Administrative, 04 Product,
 # 05 Project) are skipped: no registered project maps to them, so their facts
-# would not reach the project tools. Register VisionTech projects before adding them.
+# would not reach the project tools. Register PriorCo projects before adding them.
 
 echo "$(date '+%F %T') extract_all done"

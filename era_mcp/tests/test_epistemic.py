@@ -18,3 +18,13 @@ def test_parse_unlabelled_answer():
     out = epistemic.parse("The project started in March [1].")
     assert out["labelled"] is False
     assert out["counts"] == {"fact": 0, "inference": 0, "unknown": 0}
+
+
+def test_fact_citations_count_as_cited():
+    answer = ("FACT: Go-live is 15 Dec [F12].\n"
+              "FACT: Budget approved [F7, Budget_v3.xlsx].\n"
+              "FACT: Vendor chosen [3].\n"
+              "FACT: Nobody knows.")
+    out = epistemic.parse(answer)
+    assert out["counts"]["fact"] == 4
+    assert out["uncited_facts"] == ["Nobody knows."]

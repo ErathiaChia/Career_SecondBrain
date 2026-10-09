@@ -28,8 +28,20 @@ def provider_status() -> dict[str, Any]:
         "fallback": (
             f"openai:{config.openai_model()}"
             if config.llm_fallback_enabled() and config.openai_api_key()
-            else "disabled"
+            else ("disabled" if config.cloud_llm_optin() else "disabled (policy)")
         ),
+    }
+
+
+def unavailable_detail(err: Exception) -> dict[str, Any]:
+    """Body for the 503 that /ask returns when no local LLM answered."""
+    return {
+        "error": "llm_unavailable",
+        "provider": provider_status(),
+        "reason": str(err),
+        "hint": ("Start Ollama on the Mac (or check LLM_PRIMARY_BASE_URL). "
+                 "Cloud fallback is disabled by policy; pass synthesize=false "
+                 "to get sources without an answer."),
     }
 
 

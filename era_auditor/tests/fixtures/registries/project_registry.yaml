@@ -1,0 +1,375 @@
+version: 1
+
+# Project registry: one row per initiative.
+#
+# Lifecycle gates template enforcement:
+#   lead            -> no template requirements
+#   active_presales -> core stages required
+#   delivery        -> core stages required
+#   archived        -> no template requirements
+#
+# initiative_type controls WHICH template applies (see initiative_types.yaml):
+#   sales_opportunity / delivery_project -> canonical A/B/C stage tree
+#   workshop / strategic_initiative / architecture_artifact / research_activity
+#     / training_engagement / support_activity -> no sales lifecycle required.
+
+projects:
+  # ---------------------------------------------------------------------
+  # 01_CL89 - Acme10 Orion Vega (multi-initiative customer)
+  # ---------------------------------------------------------------------
+  - project_id: "2026-CL89-AI-STAFF-TRAINING"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Acme50 Orion Vega
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/1 Acme50 Orion Vega"
+    tags: ["training", "genai", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL89-CPX-AI-USECASE"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Vega52 Lyra Nova
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/2 Vega52 Lyra Nova"
+    tags: ["genai", "use-case", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL89-GENAI-TRENDS-SHARING"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Nova44 Zenith Atlas
+    status: active
+    lifecycle: lead
+    initiative_type: workshop
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/3 Seg77"
+    tags: ["genai", "sharing", "workshop"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL89-IVEE-ARCHITECTURE-DIAGRAM"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Zenith25 Atlas Delta
+    status: active
+    lifecycle: lead
+    initiative_type: architecture_artifact
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/4 Zenith25 Atlas Delta"
+    tags: ["architecture", "ivee"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL89-STRATEGY-FORWARD"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Nova54 Zenith
+    status: active
+    lifecycle: lead
+    initiative_type: strategic_initiative
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/5 Nova54 Zenith"
+    tags: ["strategy", "advisory"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL89-TRANSFORMATION-ACCREDITATION"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Vega2 Lyra Nova
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/6 Vega2 Lyra Nova"
+    tags: ["transformation", "accreditation", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL89-COMPLIANCES-AUDIT-CHECK"
+    customer_code: CL89
+    customer_name: Acme10 Orion Vega
+    initiative_name: Vega32 Lyra Nova
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_CL89/7 Vega32 Lyra Nova"
+    tags: ["compliance", "audit"]
+    last_updated: "2026-10-06"
+
+  # ---------------------------------------------------------------------
+  # Single-initiative customers
+  # ---------------------------------------------------------------------
+  # MODEL: these customers are single-initiative, so the customer FOLDER is also
+  # the initiative folder (the A/B/C stage tree sits directly under it, e.g.
+  # 02_Seg78/A.1. RFI_RFP_RFQ). folder_path therefore points at the
+  # customer folder and it classifies as folder_type=initiative (registry, 1.0).
+  # Multi-initiative customers (like 01_CL89) instead register one row per
+  # sub-folder initiative.
+  - project_id: "PRJ-87"
+    customer_code: CL71
+    customer_name: Delta47 Sigma Rho
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/02_Seg78"
+    tags: ["banking", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL75-AI-POC"
+    customer_code: CL75
+    customer_name: Zenith55 Atlas Delta
+    initiative_name: Nova84 Zenith
+    status: active
+    lifecycle: delivery
+    initiative_type: delivery_project
+    year: 2026
+    folder_path: "01 Project/2026/03_Seg79"
+    tags: ["banking", "poc", "delivery"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL88-AI"
+    customer_code: CL88
+    customer_name: Sigma78 Rho
+    initiative_name: Lyra63 Nova
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/04_CL88"
+    tags: ["banking", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "PRJ-88"
+    customer_code: CL82
+    customer_name: Lyra3 Nova Zenith
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/05_CL82"
+    tags: ["education", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL76-AI-PROPOSAL"
+    customer_code: CL76
+    customer_name: Nova74 Zenith
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/06_Seg80"
+    tags: ["presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "PRJ-89"
+    customer_code: CL83
+    customer_name: Atlas16 Delta Sigma
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/07_CL83"
+    tags: ["healthcare", "government", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL85-INITIATIVE"
+    customer_code: CL85
+    customer_name: Rho9 Acme Orion
+    initiative_name: Atlas66 Delta
+    status: active
+    lifecycle: lead
+    initiative_type: strategic_initiative
+    year: 2026
+    folder_path: "01 Project/2026/08_CL85"
+    tags: ["healthcare", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "PRJ-90"
+    customer_code: CL58
+    customer_name: Zenith5 Atlas Delta
+    initiative_name: Delta77 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/09_Seg81"
+    tags: ["healthcare", "government", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL94-AI"
+    customer_code: CL94
+    customer_name: Rho29 Acme Orion
+    initiative_name: Lyra63 Nova
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/10_CL94"
+    tags: ["media", "lead"]
+    last_updated: "2026-06-13"
+
+  - project_id: "PRJ-91"
+    customer_code: CL38
+    customer_name: Lyra33 Nova Zenith
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/11_Seg82"
+    tags: ["telecom", "thailand", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL87-EYE-CLINIC"
+    customer_code: CL56
+    customer_name: Delta7 Sigma Rho
+    initiative_name: Nova64 Zenith Atlas
+    status: active
+    lifecycle: delivery
+    initiative_type: delivery_project
+    year: 2026
+    folder_path: "01 Project/2026/12_CL87 - Eye Clinic"
+    tags: ["healthcare", "ml", "delivery"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL79-AI-PROPOSAL"
+    customer_code: CL79
+    customer_name: Client80
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/13_Client80"
+    tags: ["technology", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL81-AI-PROPOSAL"
+    customer_code: CL81
+    customer_name: Lyra13 Nova Zenith
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/14_Seg83"
+    tags: ["presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL91-AI-PROPOSAL"
+    customer_code: CL91
+    customer_name: CL91
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/16_CL87-CL91"
+    tags: ["presales"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-CL92-ARCHITECTURE"
+    customer_code: CL92
+    customer_name: Delta27 Sigma Rho
+    initiative_name: Delta57 Sigma
+    status: active
+    lifecycle: lead
+    initiative_type: architecture_artifact
+    year: 2026
+    folder_path: "01 Project/2026/17_CL92_Project"
+    tags: ["healthcare", "architecture", "lead"]
+    last_updated: "2026-10-06"
+
+  - project_id: "PRJ-92"
+    customer_code: CL62
+    customer_name: Rho59 Acme
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/18_Seg84"
+    tags: ["healthcare", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL72-AI-PROPOSAL"
+    customer_code: CL72
+    customer_name: Zenith65 Atlas
+    initiative_name: Delta67 Sigma
+    status: active
+    lifecycle: active_presales
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/19_Seg85"
+    tags: ["manufacturing", "presales"]
+    last_updated: "2026-06-13"
+
+  - project_id: "PRJ-93"
+    customer_code: CL95
+    customer_name: CL95
+    initiative_name: Acme60 Orion
+    status: active
+    lifecycle: lead
+    initiative_type: research_activity
+    year: 2026
+    folder_path: "01 Project/2026/20_Seg86"
+    tags: ["education", "smart-contract", "research"]
+    last_updated: "2026-06-13"
+
+  - project_id: "2026-CL87-NURSE-SCHEDULING"
+    customer_code: CL87
+    customer_name: Atlas36 Delta Sigma
+    initiative_name: Lyra53 Nova
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/21_CL87_NurseScheduling"
+    tags: ["healthcare", "scheduling"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-CL86-CL69"
+    customer_code: CL86
+    customer_name: Nova4 Zenith Atlas
+    initiative_name: CL69
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/22_CL86_Project-CL69"
+    tags: ["healthcare", "referral"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-CL90-RAG-SYSTEM"
+    customer_code: CL90
+    customer_name: Orion21 Vega Lyra
+    initiative_name: Lyra73 Nova
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/23_CL90_RAGSystem"
+    tags: ["government", "rag"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-CL93-DIGITAL-CONCIERGE"
+    customer_code: CL93
+    customer_name: Orion61 Vega
+    initiative_name: Orion51 Vega
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/24_CL93_DigitalConcierge"
+    tags: ["healthcare", "concierge"]
+    last_updated: "2026-10-06"

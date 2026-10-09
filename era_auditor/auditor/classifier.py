@@ -37,7 +37,7 @@ class BatchClassificationResponse(BaseModel):
 
 
 def load_rules(config: AppConfig) -> dict:
-    rules_path = config.base_dir / "auditor" / "rules" / "organization_rules.yaml"
+    rules_path = config.rules_dir / "organization_rules.yaml"
     return yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
 
 

@@ -1,0 +1,6 @@
+# Unit-test / lint dependencies for all three packages (runtime deps live in
+# each package's requirements.txt). Install into the same env:
+#   pip install -r requirements-dev.txt
+pytest>=8
+pytest-timeout>=2.3
+httpx>=0.27

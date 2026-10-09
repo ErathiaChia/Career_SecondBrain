@@ -113,7 +113,7 @@ def _fused_candidates(
     lex_terms = lexical_terms(query)
     w_fts = config.rrf_fts_weight()
     if 0 < len(lex_terms) <= config.short_query_terms():
-        # Acronyms / names ("SCDS", "IBF"): the embedding has little to go on,
+        # Acronyms / names ("SCDS", "CL89"): the embedding has little to go on,
         # so exact word and filename matches get full weight.
         w_fts = max(w_fts, config.rrf_vector_weight())
 
@@ -140,7 +140,7 @@ def _fused_candidates(
     # Lexical channel: optionally also match file_name + folder + file_path, not
     # just the chunk body, so short queries (acronyms, customer names, RFP ids)
     # hit the path a file was filed under even when the body never spells them
-    # out. translate() turns '01_IBF' / 'a-b.pdf' separators into spaces so the
+    # out. translate() turns '01_CL89' / 'a-b.pdf' separators into spaces so the
     # 'simple' tokenizer emits 'ibf' / 'a' / 'b' / 'pdf'.
     # The path is matched once per file (path_hits) and joined to chunks: building
     # the path tsvector per chunk row cost ~9s on ~130k chunks.
@@ -1136,3 +1136,18 @@ def knowledge_search(
             "top_k": top_k,
         },
     }
+
+
+def plan_queries(understanding: dict[str, Any], sub_queries: list[str] | None = None) -> list[tuple[str, str]]:
+    """(query_text, embed_text) pairs for multi-query retrieval. The main query
+    embeds the HyDE passage when the rewriter produced one (it was previously
+    only honoured by the legacy single-pass path); sub-queries embed themselves.
+    Identical strings are planned once so nothing is embedded twice."""
+    search_query = understanding.get("search_query") or ""
+    plan: list[tuple[str, str]] = [(search_query, understanding.get("hyde_doc") or search_query)]
+    seen = {search_query}
+    for s in sub_queries or []:
+        if s and s not in seen:
+            seen.add(s)
+            plan.append((s, s))
+    return plan

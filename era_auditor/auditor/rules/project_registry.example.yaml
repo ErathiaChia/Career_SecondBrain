@@ -1,0 +1,29 @@
+# Template for the PRIVATE project registry. Copy to
+#   <workspace>/local/auditor/rules/project_registry.yaml
+# (git-ignored; override the location with AUDITOR_REGISTRY_DIR).
+# `auditor manifest export` turns these rows into the vault_manifest the
+# indexer uses to discover projects.
+version: 1
+projects:
+  - project_id: ACME-CREDIT-2026
+    customer_code: ACME
+    customer_name: "Acme Bank"
+    folder_path: "01 Project/ACME/01_Credit Risk Intelligence"
+    initiative_name: "Credit Risk Intelligence"
+    initiative_type: ai_solution
+    lifecycle: delivery            # lead | active_presales | delivery | archived
+    status: active
+    tags: [ai, risk]
+    year: 2026
+    last_updated: "2026-10-01"
+  - project_id: ORION-CPX-2025
+    customer_code: ORION
+    customer_name: "Orion Logistics"
+    folder_path: "01 Project/ORION/02_Customer Portal"
+    initiative_name: "Customer Portal"
+    initiative_type: sales_opportunity
+    lifecycle: archived
+    status: closed
+    tags: [portal]
+    year: 2025
+    last_updated: "2025-11-15"

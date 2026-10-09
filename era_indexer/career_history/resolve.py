@@ -1,13 +1,13 @@
-"""Entity resolution: collapse duplicate entities ("ST Engg", "ST Engineering",
-"ST Engineering Pte Ltd") into one canonical entity.
+"""Entity resolution: collapse duplicate entities ("Nova Engg", "Nova Engineering",
+"Nova Engineering Pte Ltd") into one canonical entity.
 
 Matching is deterministic first, within a type group (company / organization /
 client / vendor are one group):
   - same normalized key (case, punctuation, corporate suffixes ignored),
   - token-wise match where each token is equal, a prefix (>= 3 chars), or an
     abbreviation ("engg" ~ "engineering"),
-  - acronym of a multi-word organisation name ("DBS" ~ "Development Bank of
-    Singapore"), organisations only.
+  - acronym of a multi-word organisation name ("NBS" ~ "Nova Bank of
+    Stars"), organisations only.
 Optionally, name-embedding cosine >= threshold also merges, but only when the
 names already share a matching token.
 

@@ -6,27 +6,27 @@ TODAY = date(2026, 10, 5)
 
 INPUTS = {
     "changes": [
-        {"project_id": 1, "project": "IBF", "batch_id": "b1", "severity": "warning", "summary": "x",
+        {"project_id": 1, "project": "CL89", "batch_id": "b1", "severity": "warning", "summary": "x",
          "impact": {"summary": "Go-live moved to Dec", "impact": ["Timeline slips"], "rationale_found": False}},
-        {"project_id": 1, "project": "IBF", "batch_id": "b1", "severity": "info", "summary": "y", "impact": {}},
+        {"project_id": 1, "project": "CL89", "batch_id": "b1", "severity": "info", "summary": "y", "impact": {}},
         {"project_id": 2, "project": "HLB", "batch_id": "b2", "severity": "info", "summary": "z",
          "impact": {"summary": "Doc touched"}},
     ],
     "states": [
-        {"project_id": 1, "project": "IBF", "health": {"level": "red", "overall": 35, "headline": "delivery"},
+        {"project_id": 1, "project": "CL89", "health": {"level": "red", "overall": 35, "headline": "delivery"},
          "overdue": [{"fact_id": 3, "statement": "Send SOW", "due": "2026-09-30"}],
          "upcoming": [{"fact_id": 7, "statement": "UAT start", "due": "2026-10-09"},
                       {"fact_id": 8, "statement": "Go-live", "due": "2026-12-15"}]},
         {"project_id": 2, "project": "HLB", "health": {"level": "green", "overall": 90}, "overdue": [],
          "upcoming": []},
     ],
-    "conflicts": [{"id": 5, "project_id": 1, "project": "IBF", "conflict_type": "date_mismatch",
+    "conflicts": [{"id": 5, "project_id": 1, "project": "CL89", "conflict_type": "date_mismatch",
                    "explanation": "Two go-live dates"},
                   {"id": 6, "project_id": 2, "project": "HLB", "conflict_type": "date_mismatch",
                    "explanation": "Two UAT dates"},
                   {"id": 9, "project_id": 2, "project": "HLB", "conflict_type": "status_mismatch",
                    "explanation": "SOW open vs done"}],
-    "proposed": [{"id": 1, "title": "Chase vendor", "project": "IBF"}],
+    "proposed": [{"id": 1, "title": "Chase vendor", "project": "CL89"}],
     "previous_keys": {"conflict:1:5"},
 }
 
@@ -55,7 +55,7 @@ def test_render_digest_applies_threshold():
     assert "Go-live moved to Dec" in md and "Rationale not found" in md
     assert "Doc touched" not in md
     assert "Two go-live dates" not in md
-    assert "## IBF" in md
+    assert "## CL89" in md
     empty = monitor.render_digest([], threshold=40)
     assert "Nothing needs your attention" in empty
 

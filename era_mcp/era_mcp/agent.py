@@ -20,21 +20,46 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from pathlib import Path
 from typing import Any
+
+from fastapi import HTTPException
 
 from era_mcp import config, epistemic, llm, query_understanding, rerank, retrieval, structural
 
 _PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 
 
+_PROMPTS_FROM_FILES: dict[str, bool] = {}
+
+
 def _load_prompt(name: str, fallback: str) -> str:
+    """Prompt text from era_mcp/prompts/<name>, else the short inline fallback.
+    Records which one was used so /status can say whether the deployed container
+    actually carries the prompt files (the Dockerfile must COPY them)."""
     try:
-        return (_PROMPTS / name).read_text(encoding="utf-8").strip()
+        text = (_PROMPTS / name).read_text(encoding="utf-8").strip()
+        _PROMPTS_FROM_FILES[name] = True
+        return text
     except OSError:
+        _PROMPTS_FROM_FILES[name] = False
+        logging.getLogger(__name__).warning(
+            "prompt file %s not found under %s; using inline fallback", name, _PROMPTS)
         return fallback
+
+
+def prompts_loaded_from_files() -> bool:
+    return bool(_PROMPTS_FROM_FILES) and all(_PROMPTS_FROM_FILES.values())
+
+
+def assert_prompts_loaded() -> None:
+    """Build-time check (Dockerfile) that the prompt files are in the image."""
+    missing = [n for n in ("judge_agent.md", "synthesis.md") if not (_PROMPTS / n).exists()]
+    if missing:
+        raise RuntimeError(f"prompt files missing from image: {missing} (expected in {_PROMPTS})")
 
 
 _JUDGE_SYS = _load_prompt(
@@ -125,15 +150,21 @@ def _summarize(results: list[dict[str, Any]], limit: int = 12) -> list[dict[str,
     return out
 
 
-async def _retrieve(query_texts: list[str], req: Any, top_k: int) -> list[dict[str, Any]]:
+async def _retrieve(query_texts: list[Any], req: Any, top_k: int) -> list[dict[str, Any]]:
     """Embed each query (instruction applied in embed_query) and run multi-query
-    fused retrieval + a single rerank against the user's original question."""
+    fused retrieval + a single rerank against the user's original question.
+    Items are query strings or ``(query_text, embed_text)`` pairs (HyDE)."""
     seen: set[str] = set()
-    texts = [q for q in query_texts if q and not (q in seen or seen.add(q))]
-    if not texts:
+    planned: list[tuple[str, str]] = []
+    for q in query_texts:
+        text, embed_text = (q, q) if isinstance(q, str) else q
+        if text and text not in seen:
+            seen.add(text)
+            planned.append((text, embed_text or text))
+    if not planned:
         return []
-    embeddings = await asyncio.gather(*[retrieval.embed_query(t) for t in texts])
-    pairs = list(zip(texts, embeddings))
+    embeddings = await asyncio.gather(*[retrieval.embed_query(e) for _, e in planned])
+    pairs = [(t, emb) for (t, _), emb in zip(planned, embeddings)]
     return await retrieval.multi_search_async(
         queries=pairs,
         rerank_query=req.query,
@@ -306,9 +337,10 @@ async def run_agentic_ask(req: Any) -> dict:
     pool: dict[tuple, dict] = {}
     trajectory: list[dict] = []
     queries_tried: list[str] = []
-    first_qs = [search_query] + list(sub_queries)
+    first_plan = retrieval.plan_queries(understanding, sub_queries)
+    first_qs = [t for t, _ in first_plan]
     try:
-        _merge(pool, await _retrieve(first_qs, req, effective_top_k))
+        _merge(pool, await _retrieve(first_plan, req, effective_top_k))
     except llm.LLMUnavailable:
         pass  # embedding is not LLM; but keep symmetric guard
     except Exception:
@@ -404,8 +436,9 @@ async def run_agentic_ask(req: Any) -> dict:
         try:
             answer = await _synthesize(req.query, chunks, graph, investigation)
         except llm.LLMUnavailable as e:
-            degraded = True
-            degraded_reason = f"llm_unavailable: {e}"
+            # Local-first: no cloud fallback, so an unreachable Mac is an error,
+            # not a silently degraded answer. synthesize=false still returns sources.
+            raise HTTPException(status_code=503, detail=llm.unavailable_detail(e))
     elif req.synthesize and not chunks:
         degraded = True
         degraded_reason = degraded_reason or "no_results"
@@ -428,4 +461,5 @@ async def run_agentic_ask(req: Any) -> dict:
         "degraded": degraded,
         "degraded_reason": degraded_reason,
         "reranked": bool(req.rerank and chunks and any("rerank_score" in c for c in chunks)),
+        "rerank_error": rerank.last_error(),
     }

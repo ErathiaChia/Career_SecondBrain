@@ -53,10 +53,10 @@ class NormalizeAssetNameTests(unittest.TestCase):
 class ParseProjectContextTests(unittest.TestCase):
     def test_standard_project_path(self) -> None:
         customer, project = parse_project_context(
-            "01 Project/2026/01_IBF/1 AI Staff Training/A.2. Proposal/deck.pptx"
+            "01 Project/2026/01_CL89/1 Acme50 Orion Vega/A.2. Proposal/deck.pptx"
         )
-        self.assertEqual(customer, "01_IBF")
-        self.assertEqual(project, "01_IBF/1 AI Staff Training")
+        self.assertEqual(customer, "01_CL89")
+        self.assertEqual(project, "01_CL89/1 Acme50 Orion Vega")
 
     def test_non_project_path(self) -> None:
         customer, project = parse_project_context("04 Resources/01 PreSales/deck.pptx")
@@ -85,7 +85,7 @@ class ReuseScoreTests(unittest.TestCase):
 class AssetRegistryBuilderTests(unittest.TestCase):
     def test_groups_copies_by_hash(self) -> None:
         files = [
-            file_row("01 Project/2026/01_IBF/Training/deck.pptx", content_hash="h1"),
+            file_row("01 Project/2026/01_CL89/Training/deck.pptx", content_hash="h1"),
             file_row("01 Project/2026/02_BNM/Workshop/deck.pptx", content_hash="h1"),
             file_row("04 Resources/01 PreSales/other.pdf", content_hash="h2"),
         ]
@@ -101,7 +101,7 @@ class AssetRegistryBuilderTests(unittest.TestCase):
 
     def test_canonical_location_prefers_resources(self) -> None:
         files = [
-            file_row("01 Project/2026/01_IBF/Training/deck.pptx", content_hash="h1"),
+            file_row("01 Project/2026/01_CL89/Training/deck.pptx", content_hash="h1"),
             file_row("04 Resources/01 PreSales/deck.pptx", content_hash="h1"),
         ]
         assets = AssetRegistryBuilder(FakeDatabase(files)).build()
@@ -137,8 +137,8 @@ class AssetFamilyTests(unittest.TestCase):
     def test_working_set_variants_share_family_key(self) -> None:
         # Page exports of the same deck should resolve to one family.
         files = [
-            file_row("01 Project/2026/IBF/Slides/Page6_IVEE_Platform.pdf", content_hash="a"),
-            file_row("01 Project/2026/IBF/Slides/Page8_IVEE_Platform.pdf", content_hash="b"),
+            file_row("01 Project/2026/CL89/Slides/Page6_IVEE_Platform.pdf", content_hash="a"),
+            file_row("01 Project/2026/CL89/Slides/Page8_IVEE_Platform.pdf", content_hash="b"),
         ]
         assets = AssetRegistryBuilder(FakeDatabase(files)).build()
         families = {a.family_key for a in assets}
@@ -147,8 +147,8 @@ class AssetFamilyTests(unittest.TestCase):
 
     def test_distinct_assets_have_distinct_families(self) -> None:
         files = [
-            file_row("01 Project/IBF/Proposal.pdf", content_hash="a"),
-            file_row("01 Project/IBF/Estimation.pdf", content_hash="b"),
+            file_row("01 Project/CL89/Proposal.pdf", content_hash="a"),
+            file_row("01 Project/CL89/Estimation.pdf", content_hash="b"),
         ]
         assets = AssetRegistryBuilder(FakeDatabase(files)).build()
         families = {a.family_key for a in assets}

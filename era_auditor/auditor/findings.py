@@ -520,7 +520,7 @@ class FindingsGenerator:
             if classification and classification.folder_type == "initiative":
                 initiative_paths.add(folder.path)
         # Customer folders whose direct children include stage folders act as
-        # the initiative themselves (e.g. 02_Bank_Negara/A.1...).
+        # the initiative themselves (e.g. 02_Seg78/A.1...).
         for folder in folders:
             classification = classifications.get(folder.id)
             if classification and classification.folder_type == "customer":

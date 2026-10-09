@@ -39,7 +39,7 @@ def test_doc_type_hint_routes_by_type_and_name():
     assert "RAID" in graph.doc_type_hint("xlsx", "HLB_RAID_Log_v3.xlsx")
     assert "Slide deck" in graph.doc_type_hint("pptx", "Kickoff.pptx")
     assert "Meeting" in graph.doc_type_hint("docx", "2026-09-01 Meeting Minutes.docx")
-    assert "Proposal" in graph.doc_type_hint("pdf", "IBF_Proposal_v2.pdf")
+    assert "Proposal" in graph.doc_type_hint("pdf", "CL89_Proposal_v2.pdf")
     assert "README" in graph.doc_type_hint("md", "README.md")
     assert "Meeting" in graph.doc_type_hint("m4a", "recording.m4a")
 

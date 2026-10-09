@@ -8,7 +8,7 @@
 
 Two real failures from live Open WebUI transcripts motivate this:
 
-1. **Relevance ("what's the latest on IBF?")** — single-pass retrieval returned
+1. **Relevance ("what's the latest on CL89?")** — single-pass retrieval returned
    unrelated chunks and *didn't try harder*; the user had to manually coach it
    over 6 turns. The agent can't tell good results from bad and never retries.
 2. **Wrong tool ("how many projects? list all folders")** — these are *census*
@@ -99,8 +99,8 @@ full chunks are never sent to the Judge, only summaries, so each turn stays fast
 // OUT:
 { "action": "research|structural|answer",
   "sufficient": false,
-  "missing": "no doc mentions the IBF award/kickoff, only the RFP",
-  "reformulations": ["IBF programme accreditation award outcome", "..."], // action=research
+  "missing": "no doc mentions the CL89 award/kickoff, only the RFP",
+  "reformulations": ["CL89 programme accreditation award outcome", "..."], // action=research
   "query": "projects under 01 Project/2026",                              // action=structural
   "confidence": 0.4 }
 ```
@@ -143,8 +143,8 @@ Three layers, in the order `era_mcp` should rely on them:
 
 ```jsonc
 // Vault Manifest entry — generic/flexible; "kind" is advisory, not a fixed taxonomy
-{ "path": ".../14. ST-Engg/01 Project/2026/16_HC3",
-  "name": "HC3", "kind": "project?", "parent": "01 Project/2026",
+{ "path": ".../14. Corp-A/01 Project/2026/16_CL91",
+  "name": "CL91", "kind": "project?", "parent": "01 Project/2026",
   "file_count": 12, "last_modified": "2026-05-30",
   "generated_at": "…", "manifest_version": 7 }
 ```

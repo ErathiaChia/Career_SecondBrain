@@ -26,7 +26,8 @@ MONTH_NAME_PATTERN = re.compile(
 class FolderConstitution:
     def __init__(self, config: AppConfig):
         self.config = config
-        self.rules_dir = config.base_dir / "auditor" / "rules"
+        self.rules_dir = config.rules_dir
+        self._config = config
         self.organization_rules = self._load_yaml("organization_rules.yaml")
         self.project_templates = self._load_yaml("project_templates.yaml")
         self.customer_registry = self._load_yaml("customer_registry.yaml")
@@ -421,6 +422,10 @@ class FolderConstitution:
 
     def _load_yaml(self, name: str) -> dict[str, Any]:
         path = self.rules_dir / name
+        if name in self._config._REGISTRY_FILES:
+            path = self._config.registry_path(name)
+        if not path.exists():
+            return {}
         return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
     def _appears_under_project(self, parts: list[str]) -> bool:

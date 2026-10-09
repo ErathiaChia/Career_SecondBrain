@@ -1,7 +1,7 @@
 from era_mcp import deliverables as d
 
 TODAY = "2026-10-05"
-PROJECT = {"id": 1, "name": "IBF Portal", "client": "IBF", "project_type": "delivery",
+PROJECT = {"id": 1, "name": "CL89 Portal", "client": "CL89", "project_type": "delivery",
            "status": "ACTIVE", "last_activity": "2026-10-01T10:00:00"}
 
 
@@ -40,7 +40,7 @@ def test_rank_next_actions_orders_by_urgency_with_reasons():
 
 def test_render_brief_cites_and_flags():
     md = d.render_brief(PROJECT, None, FACTS, [], CONFLICTS, [], today=TODAY)
-    assert "## Project brief: IBF Portal" in md
+    assert "## Project brief: CL89 Portal" in md
     assert "No project state built yet" in md
     assert "Host on Azure" in md and "older version" in md
     assert "Needs confirmation" in md
@@ -58,8 +58,8 @@ def test_render_meeting_prep_per_attendee_and_topic():
 
 def test_render_whats_happening():
     md = d.render_whats_happening(
-        [{"project": "IBF Portal", "summary": "Document modified: plan.docx",
+        [{"project": "CL89 Portal", "summary": "Document modified: plan.docx",
           "impact": {"summary": "Go-live moved", "impact": ["Timeline slips 6 weeks"]}}],
-        [{"name": "IBF Portal", "level": "amber", "headline": "delivery weak"}],
-        [{"due": "2026-10-08", "project": "IBF Portal", "statement": "Book UAT room", "fact_id": 2}], 7)
+        [{"name": "CL89 Portal", "level": "amber", "headline": "delivery weak"}],
+        [{"due": "2026-10-08", "project": "CL89 Portal", "statement": "Book UAT room", "fact_id": 2}], 7)
     assert "Go-live moved" in md and "Timeline slips" in md and "AMBER" in md and "2026-10-08" in md

@@ -28,7 +28,7 @@ so prefer them for questions about what was decided or promised.
   when did X happen". Filter with `kind` = `decision` | `commitment` | `event`.
   Each result has `statement`, `source_quote`, `file_name`, `occurred_at`,
   `confidence`.
-- **`search_entities`** — resolve a name, acronym, or alias ("IBF", "Ron") to a
+- **`search_entities`** — resolve a name, acronym, or alias ("CL89", "Ron") to a
   canonical entity and its `id`.
 - **`get_entity_facts`** — all facts where that entity is the subject, object, or
   project. Use after `search_entities` for "everything decided about X".
@@ -49,7 +49,7 @@ Projects are first-class: each has a client, type, status, owner, files, version
 families, a current **state** (phase, objectives, decisions, requirements, risks,
 blockers, open questions, next actions, milestones) and explainable **health**.
 Every state field carries `confidence`, `sources` (file + fact id) and
-`last_verified`. Refer to a project by name, key, alias or id ("IBF", "HLB").
+`last_verified`. Refer to a project by name, key, alias or id ("CL89", "HLB").
 
 Pick the tool by intent:
 

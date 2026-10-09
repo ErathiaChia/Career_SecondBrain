@@ -35,12 +35,12 @@ Strategy decisions (locked):
 
 ## Test constraints (from tests/test_constitution.py)
 
-- Line 76: already expects `02_Bank_Negara`-sibling `09_SG-MOH C3 (DEROM)` ->
-  `customer_code == "SG_MOH_C3_DEROM"`. (Confirms Workstream A.)
-- Lines 58-59: `MY_MOH` -> `"Malaysia Ministry of Health"` is TEST-PINNED. Keep
+- Line 76: already expects `02_Seg78`-sibling `09_Seg81` ->
+  `customer_code == "CL58"`. (Confirms Workstream A.)
+- Lines 58-59: `CL83` -> `"Sigma18 Rho Acme"` is TEST-PINNED. Keep
   this exact `full_name` in customer_registry.yaml.
-- Lines 147-190: use `02_Bank_Negara` as the deliberate UNKNOWN-customer fixture
-  (`unknown_customer` + `enrich_registry`). Adding `BANK_NEGARA` to the registry
+- Lines 147-190: use `02_Seg78` as the deliberate UNKNOWN-customer fixture
+  (`unknown_customer` + `enrich_registry`). Adding `CL71` to the registry
   makes it KNOWN and breaks these 2 tests -> Workstream F swaps the fixture.
 
 ---
@@ -48,19 +48,19 @@ Strategy decisions (locked):
 ## Registry modeling decision (added during execution)
 
 The generated registry had 18 entries whose `folder_path` pointed at the
-*customer* folder itself (e.g. `01 Project/2026/07_MY_MOH`). The constitution
+*customer* folder itself (e.g. `01 Project/2026/07_CL83`). The constitution
 matches those as `initiative` (project match, conf 1.0), which broke two tests
 that assert customer-named year-children must classify as `customer`.
 
 FINAL decision (user, corrected against the real tree): **two shapes.**
-- Multi-initiative customers (01_IBF): one registry row per sub-folder initiative
-  (`01_IBF/1 AI Staff Training` ...). Parent `01_IBF` stays `customer`.
+- Multi-initiative customers (01_CL89): one registry row per sub-folder initiative
+  (`01_CL89/1 Acme50 Orion Vega` ...). Parent `01_CL89` stays `customer`.
 - Single-initiative customers: the stage tree sits DIRECTLY under the customer
-  folder (e.g. `02_Bank_Negara/A.1. RFI_RFP_RFQ`), so the customer folder IS the
+  folder (e.g. `02_Seg78/A.1. RFI_RFP_RFQ`), so the customer folder IS the
   initiative. `folder_path` points at the customer folder; it classifies as
   `folder_type=initiative` (project_registry, conf 1.0).
 
-24 initiatives total (6 IBF sub-folders + 18 customer-folder initiatives). Tests
+24 initiatives total (6 CL89 sub-folders + 18 customer-folder initiatives). Tests
 updated: registered customer-folder -> initiative; an UNregistered customer-named
 year child still -> customer (container rule). 96 tests pass.
 
@@ -78,24 +78,24 @@ Make `customer_code` folder-derived (matches `customer_code()` / `relaxed_custom
 
 | folder_path | from | to |
 |---|---|---|
-| `02_Bank_Negara` | `BNM` | `BANK_NEGARA` |
-| `09_SG-MOH C3 (DEROM)` | `SG_MOH_C3` | `SG_MOH_C3_DEROM` |
-| `11_Thailand - True Telecom` | `TRUE_TELECOM` | `THAILAND_TRUE_TELECOM` |
-| `12_TTSH - Eye Clinic` | `TTSH` | `TTSH_EYE_CLINIC` |
-| `20_TemasekPoly_SmartContract` | `TEMASEKPOLY` | `TEMASEKPOLY_SMARTCONTRACT` |
+| `02_Seg78` | `BNM` | `CL71` |
+| `09_Seg81` | `SG_MOH_C3` | `CL58` |
+| `11_Seg82` | `TRUE_TELECOM` | `CL38` |
+| `12_CL87 - Eye Clinic` | `CL87` | `CL56` |
+| `20_Seg86` | `TEMASEKPOLY` | `TEMASEKPOLY_SMARTCONTRACT` |
 
-The other ~19 entries (incl. all IBF initiatives) already match.
+The other ~19 entries (incl. all CL89 initiatives) already match.
 
 ---
 
 ## Workstream B - customer_registry.yaml full rewrite
 
 One entry per customer folder, key = folder-derived code. Test-pinned name
-(`MY_MOH`) preserved exactly. Codes:
+(`CL83`) preserved exactly. Codes:
 
-`IBF, BANK_NEGARA, HONGLEONG, DBS, ITE_AMK, MUSIMMAS, MY_MOH, NUHS,
-SG_MOH_C3_DEROM, SPH, THAILAND_TRUE_TELECOM, TTSH_EYE_CLINIC, HCLTECH, SENTOSA,
-HC3, HSA, VANGUARDHEALTH, TAIYOYUDEN, TEMASEKPOLY_SMARTCONTRACT`
+`CL89, CL71, CL75, CL88, CL82, CL76, CL83, CL85,
+CL58, CL94, CL38, CL56, CL79, CL81,
+CL91, CL92, CL62, CL72, TEMASEKPOLY_SMARTCONTRACT`
 
 ---
 
@@ -145,7 +145,7 @@ prompt enum list.
 
 In tests/test_constitution.py, `test_unknown_customer_is_registry_enrichment`
 (147-167) and `test_rejected_finding_pattern_is_suppressed` (169-190) use
-`02_Bank_Negara`. Since BANK_NEGARA becomes known, swap to a path that is in no
+`02_Seg78`. Since CL71 becomes known, swap to a path that is in no
 registry (e.g. `01 Project/2026/99_FakeCorp`) so the unknown-customer path is
 still exercised.
 

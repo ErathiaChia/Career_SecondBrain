@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from auditor.config import load_config
+from tests._cfg import auditor_config
 from auditor.constitution import FolderConstitution
 from auditor.findings import FindingsGenerator
 from auditor.folder_roles import FolderRole, FolderRoleResolver
@@ -52,7 +52,7 @@ def make_generator(constitution: FolderConstitution) -> FindingsGenerator:
 class FolderRoleResolverTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         constitution = FolderConstitution(config)
         cls.resolver = FolderRoleResolver(constitution.naming_standards)
 
@@ -90,7 +90,7 @@ class FolderRoleResolverTests(unittest.TestCase):
             )
 
     def test_structural_classification_wins(self) -> None:
-        folder = folder_record(1, "01 Project/2026/01_IBF")
+        folder = folder_record(1, "01 Project/2026/01_CL89")
         classification = FolderClassification(
             folder_type="customer", confidence=0.9, reasoning="test"
         )
@@ -139,7 +139,7 @@ class NoiseEliminationTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         cls.constitution = FolderConstitution(config)
 
     def _arch_findings(self, paths: list[str], file_count: int = 3) -> list:
@@ -153,7 +153,7 @@ class NoiseEliminationTests(unittest.TestCase):
     def test_resources_name_match_produces_no_findings(self) -> None:
         findings = self._arch_findings(
             [
-                "01 Project/2026/01_IBF/Training/Resources",
+                "01 Project/2026/01_CL89/Training/Resources",
                 "02 Ops/04 FDE/Resources",
                 "04 Resources/01 PreSales/Resources",
             ]

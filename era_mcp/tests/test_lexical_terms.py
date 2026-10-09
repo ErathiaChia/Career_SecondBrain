@@ -6,7 +6,7 @@ def test_drops_stopwords_and_question_words():
 
 
 def test_keeps_acronyms_and_versions_deduplicated():
-    assert lexical_terms("IBF ibf V4 effort-estimation") == ["ibf", "v4", "effort", "estimation"]
+    assert lexical_terms("CL89 cl89 V4 effort-estimation") == ["cl89", "v4", "effort", "estimation"]
 
 
 def test_only_safe_tsquery_tokens():

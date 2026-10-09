@@ -7,7 +7,7 @@ def _e(id_, name, type_="company", mentions=1, metadata=None):
 
 
 def test_name_tokens_strip_corporate_suffixes_for_orgs_only():
-    assert resolve.name_tokens("ST Engineering Pte Ltd", "company") == ["st", "engineering"]
+    assert resolve.name_tokens("Nova Engineering Pte Ltd", "company") == ["nova", "engineering"]
     assert resolve.name_tokens("Working Group", "concept") == ["working", "group"]
 
 
@@ -19,17 +19,17 @@ def test_token_match_prefix_and_abbreviation():
 
 
 def test_acronym_match():
-    assert resolve.acronym_match("DBS", ["development", "bank", "of", "singapore"])
-    assert not resolve.acronym_match("dbs", ["development", "bank", "singapore"])
-    assert not resolve.acronym_match("DBS", ["dbs"])
+    assert resolve.acronym_match("NBS", ["nova", "bank", "of", "stars"])
+    assert not resolve.acronym_match("nbs", ["nova", "bank", "stars"])
+    assert not resolve.acronym_match("NBS", ["nbs"])
 
 
 def test_plan_merges_folds_variants_into_most_mentioned():
     entities = [
-        _e(1, "ST Engineering", mentions=40),
-        _e(2, "ST Engg", mentions=3),
-        _e(3, "ST Engineering Pte Ltd", type_="organization", mentions=5),
-        _e(4, "Singtel", mentions=10),
+        _e(1, "Nova Engineering", mentions=40),
+        _e(2, "Nova Engg", mentions=3),
+        _e(3, "Nova Engineering Pte Ltd", type_="organization", mentions=5),
+        _e(4, "Orion Telco", mentions=10),
     ]
     merges = resolve.plan_merges(entities)
     assert {(m["source_id"], m["target_id"]) for m in merges} == {(2, 1), (3, 1)}
@@ -42,8 +42,8 @@ def test_plan_merges_respects_type_groups():
 
 def test_plan_merges_prefers_project_anchored_entity():
     entities = [
-        _e(1, "IBF Portal", "project", mentions=50),
-        _e(2, "IBF-Portal", "project", mentions=2, metadata={"source": "path-seed"}),
+        _e(1, "CL89 Portal", "project", mentions=50),
+        _e(2, "CL89-Portal", "project", mentions=2, metadata={"source": "path-seed"}),
     ]
     merges = resolve.plan_merges(entities)
     assert merges and merges[0]["target_id"] == 2

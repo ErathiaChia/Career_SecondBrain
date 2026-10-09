@@ -9,21 +9,33 @@ from typing import Any, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
-from .config import AppConfig
+from .config import AppConfig, is_private_url
 
 
 T = TypeVar("T", bound=BaseModel)
 
 
 class OpenAIClient:
+    """OpenAI-compatible chat client. Local Ollama by default; a cloud endpoint
+    only when ``openai.cloud_optin`` is set (organisation policy)."""
+
     def __init__(self, config: AppConfig):
         self.config = config
-        api_key = os.getenv(config.openai.api_key_env)
-        if not api_key:
-            raise RuntimeError(
-                f"Missing OpenAI API key. Set {config.openai.api_key_env} in .env or the environment."
-            )
-        self.client = OpenAI(api_key=api_key)
+        base_url = config.openai.base_url.rstrip("/")
+        api_key = os.getenv(config.openai.api_key_env) or ""
+        if config.openai.cloud_optin:
+            if not api_key:
+                raise RuntimeError(
+                    f"Cloud LLM opted in but no API key: set {config.openai.api_key_env}."
+                )
+        else:
+            if not is_private_url(base_url):
+                raise RuntimeError(
+                    f"openai.base_url {base_url!r} is not a local/private host and "
+                    "AUDITOR_CLOUD_OPTIN is off. Vault content must stay local."
+                )
+            api_key = api_key or "ollama"  # local servers ignore the key
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
 
     def load_prompt(self, name: str) -> str:
         path = self.config.base_dir / "auditor" / "prompts" / name

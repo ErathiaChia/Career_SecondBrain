@@ -25,7 +25,7 @@ class RegistryBootstrapper:
         self.config = config
         self.database = database
         self.constitution = FolderConstitution(config)
-        self.rules_dir = config.base_dir / "auditor" / "rules"
+        self.rules_dir = config.rules_dir
 
     # ------------------------------------------------------------------
     # Patch generation
@@ -126,10 +126,12 @@ class RegistryBootstrapper:
         return path
 
     def apply_patch(self, patch: dict[str, Any]) -> dict[str, int]:
-        customer_path = self.rules_dir / "customer_registry.yaml"
-        project_path = self.rules_dir / "project_registry.yaml"
+        customer_path = self.config.registry_path("customer_registry.yaml")
+        project_path = self.config.registry_path("project_registry.yaml")
+        customer_path.parent.mkdir(parents=True, exist_ok=True)
 
-        customer_data = yaml.safe_load(customer_path.read_text(encoding="utf-8")) or {}
+        customer_data = (yaml.safe_load(customer_path.read_text(encoding="utf-8")) or {}
+                         if customer_path.exists() else {})
         customer_data.setdefault("customers", {})
         added_customers = 0
         for code, entry in (patch.get("customers") or {}).items():
@@ -142,7 +144,8 @@ class RegistryBootstrapper:
             }
             added_customers += 1
 
-        project_data = yaml.safe_load(project_path.read_text(encoding="utf-8")) or {}
+        project_data = (yaml.safe_load(project_path.read_text(encoding="utf-8")) or {}
+                        if project_path.exists() else {})
         project_data.setdefault("projects", [])
         existing_paths = {
             project.get("folder_path") for project in project_data["projects"]

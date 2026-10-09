@@ -4,7 +4,7 @@ Derives one canonical ``entities`` row per project from file paths and links eve
 file under that project as a file-level ``entity_mention``. Runs inside
 ``discover`` (so project entities stay current as folders change) and via the
 ``seed-entities`` CLI command. This is what gives the agent canonical project
-resolution ("IBF" -> the IBF project entity) + aggregation, with zero LLM.
+resolution ("CL89" -> the CL89 project entity) + aggregation, with zero LLM.
 
 Configure where projects live in config.yaml:
 
@@ -15,7 +15,7 @@ Configure where projects live in config.yaml:
 
 The folder segment immediately following a root fragment in a file path is taken
 as the project; aliases are derived by stripping the numeric ordering prefix
-("01_IBF" -> alias "IBF"). Idempotent: clears prior path-seed mentions and
+("01_CL89" -> alias "CL89"). Idempotent: clears prior path-seed mentions and
 re-inserts, so re-runs never bloat. No-op when no roots are configured.
 """
 from __future__ import annotations

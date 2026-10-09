@@ -80,10 +80,10 @@ class AssetPromotionThresholdTests(unittest.TestCase):
                     project_count=4,
                     customer_count=4,
                     paths=[
-                        "01 Project/2026/06_MusimMas/A.3. Workshop/Genie_Workshop.pptx",
-                        "01 Project/2026/03_HongLeong/A.3. Workshop/Genie_Workshop.pptx",
-                        "01 Project/2026/01_IBF/A.3. Workshop/Genie_Workshop.pptx",
-                        "01 Project/2026/18_VanguardHealth/A.3. Workshop/Genie_Workshop.pptx",
+                        "01 Project/2026/06_Seg80/A.3. Workshop/Genie_Workshop.pptx",
+                        "01 Project/2026/03_Seg79/A.3. Workshop/Genie_Workshop.pptx",
+                        "01 Project/2026/01_CL89/A.3. Workshop/Genie_Workshop.pptx",
+                        "01 Project/2026/18_Seg84/A.3. Workshop/Genie_Workshop.pptx",
                     ],
                 )
             ]
@@ -126,8 +126,8 @@ class SemanticWorkingSetSuppressionTests(unittest.TestCase):
         root = "/vault"
         pair = self._pair(
             root,
-            "IBF/Slides/Page6_IVEE_Platform_Evolution.pdf",
-            "IBF/Slides/Page12_IVEE_Platform_Evolution.pdf",
+            "CL89/Slides/Page6_IVEE_Platform_Evolution.pdf",
+            "CL89/Slides/Page12_IVEE_Platform_Evolution.pdf",
         )
         self.assertTrue(_is_workingset_pair(pair))
 
@@ -135,8 +135,8 @@ class SemanticWorkingSetSuppressionTests(unittest.TestCase):
         root = "/vault"
         pair = self._pair(
             root,
-            "IBF/Slides/IVEE_Platform_Evolution.pdf",
-            "IBF/Slides/V3 - Resources/V3_IVEE_Platform_Evolution.pdf",
+            "CL89/Slides/IVEE_Platform_Evolution.pdf",
+            "CL89/Slides/V3 - Resources/V3_IVEE_Platform_Evolution.pdf",
         )
         self.assertTrue(_is_workingset_pair(pair))
 
@@ -210,15 +210,15 @@ class SemanticClusteringTests(unittest.TestCase):
         pairs = [
             self._pair(
                 root,
-                "IBF/Slides/Page6_IVEE.pdf",
-                "IBF/Slides/Page12_IVEE.pdf",
+                "CL89/Slides/Page6_IVEE.pdf",
+                "CL89/Slides/Page12_IVEE.pdf",
                 "Page6_IVEE.pdf",
                 "Page12_IVEE.pdf",
             ),
             self._pair(
                 root,
-                "IBF/Slides/Page6_IVEE.pdf",
-                "IBF/Slides/Page9_IVEE.pdf",
+                "CL89/Slides/Page6_IVEE.pdf",
+                "CL89/Slides/Page9_IVEE.pdf",
                 "Page6_IVEE.pdf",
                 "Page9_IVEE.pdf",
             ),

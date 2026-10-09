@@ -171,8 +171,8 @@ def _tokens(s: str) -> set[str]:
 
 
 def _resolve_by_tokens(ref: str) -> dict[str, Any] | None:
-    """Punctuation-insensitive fallback: 'CPX AI Use Case' -> 'CPX - AI Use Case',
-    'TTSH eye center' -> 'Eye Clinic AI' (TTSH). A project qualifies when at least
+    """Punctuation-insensitive fallback: 'CPX AI Use Case' -> 'CL89 CPX AI Use Case',
+    'CL87 eye center' -> 'CL87 Eye Clinic' (CL87). A project qualifies when at least
     two-thirds of the tokens of ``ref`` (and at least two, unless ``ref`` is a single
     token) appear in its name/key/client/aliases; best coverage wins."""
     wanted = _tokens(ref)

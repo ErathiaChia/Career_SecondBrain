@@ -5,14 +5,14 @@ This is the measurement harness for the V3 retrieval work. You list real
 questions and, for each, the path fragment(s) of the document that *should* be
 retrieved. The script hits a running era_mcp server, finds the rank at which an
 expected document first appears, and reports hit@k and MRR so you can compare a
-change against a baseline ("IBF: rank 30 -> rank 1").
+change against a baseline ("CL89: rank 30 -> rank 1").
 
 Run the server first (see era_mcp/README.md), then:
 
     python -m tools.scorecard                     # uses tools/scorecard_questions.json
     python -m tools.scorecard --endpoint search   # pure retrieval, no LLM needed
     python -m tools.scorecard --endpoint ask       # full /ask pipeline (needs the Mac LLM)
-    python -m tools.scorecard --questions my.json --base-url http://192.168.50.50:8808
+    python -m tools.scorecard --questions my.json --base-url http://${NAS_HOST}:8808
 
 Dependencies: httpx only (already an era_mcp dependency). Questions are JSON so
 no extra YAML dependency is needed.

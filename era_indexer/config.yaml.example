@@ -25,9 +25,9 @@ models:
   # too small). A 9B MLX model is fast on Metal and reliable at JSON; avoid 35B
   # for per-chunk extraction (~15-40s/chunk).
   graph_extraction_model: "qwen3.5:9b-mlx"
-  # Use a NON-thinking model here (gemma*, llama*) — reasoning models (qwen3.x)
-  # return empty/garbage under the forced JSON format. Read timeout per extraction
-  # call (seconds); document-level calls on a local model can take minutes.
+  # qwen3.5 works for JSON extraction with graph_extraction_think=false (validated
+  # over ~1,700 files at ~85 s/file); gemma*/llama* also work. Read timeout per
+  # extraction call (seconds); document-level calls on a local model can take minutes.
   graph_extraction_timeout: 600
   # Document-level extraction splits long files into windows of this many chars
   # (one call each, merged) instead of truncating to the first window.
@@ -36,7 +36,9 @@ models:
   # Thinking must stay off for JSON extraction (thinking models run to the timeout).
   graph_extraction_think: false
   graph_num_ctx: 16384
-  graph_num_predict: 4096
+  # Output budget per window: facts + entities + relationships + the document
+  # card (Phase 2). A truncated reply (done_reason=length) is retried as halves.
+  graph_num_predict: 6144
   graph_keep_alive: "30m"
   # Optional: separate model for the Contextual-Retrieval situating blurb.
   # Defaults to graph_extraction_model when unset.
@@ -137,7 +139,7 @@ v3:
 
 # Deterministic project-entity seeding (Layer 1; no LLM). The folder segment
 # immediately AFTER each fragment below is treated as a project; aliases are
-# derived by stripping the numeric prefix ("01_IBF" -> "IBF"). Runs inside
+# derived by stripping the numeric prefix ("01_CL89" -> "CL89"). Runs inside
 # discover and via the `seed-entities` command. Leave empty to disable. Use the
 # path fragments as they appear in file_registry.file_path; add each active
 # period's container.

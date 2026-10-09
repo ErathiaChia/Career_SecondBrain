@@ -234,7 +234,7 @@ Clean-reset runbook:
 cd era_indexer
 
 # Optional but strongly recommended: backup era_vault before clearing data.
-pg_dump -h 192.168.50.75 -p 15432 -U era -d era_vault \
+pg_dump -h ${NAS_HOST} -p 15432 -U era -d era_vault \
   -Fc -f ~/era_vault_backup_$(date +%Y%m%d).dump
 
 # Destructive reset of Era Vault indexed data only.
@@ -248,8 +248,8 @@ ollama pull qwen3-embedding:0.6b   # NAS Ollama host (era_mcp)
 ollama pull gemma4:12b-mlx         # if document_images.descriptions_enabled
 
 # First pilot only. With the current config, source_directories already points
-# at /Volumes/homes/Erathia/Career/13. VisionTech, so do not pass
-# --folder "13. VisionTech" or the path will be doubled.
+# at /Volumes/homes/Erathia/Career/13. PriorCo, so do not pass
+# --folder "13. PriorCo" or the path will be doubled.
 python -m career_history.cli update-documents --limit 10
 python -m career_history.cli status
 ```
@@ -290,7 +290,7 @@ python -m career_history.cli update-documents
 python -m career_history.cli update-meetings
 
 # Update one folder (name must match a path segment under source_directories)
-python -m career_history.cli update --folder "13. VisionTech"
+python -m career_history.cli update --folder "13. PriorCo"
 
 # Process up to 5 files this run (good for testing)
 python -m career_history.cli update --folder Meetings --limit 5
@@ -327,16 +327,16 @@ chunks and writes new rows — **it never re-embeds or re-chunks**.
 ```bash
 # Deterministic project entities from the folder taxonomy (no LLM, fast).
 # Configure seed.project_roots in config.yaml first. Also runs inside `discover`.
-python -m career_history.cli seed-entities --folder "14. ST-Engg"
+python -m career_history.cli seed-entities --folder "14. Corp-A"
 
 # DOCUMENT-LEVEL extraction (recommended at scale): ONE LLM call per FILE, not
 # per chunk. For an 81k-chunk vault that's ~hundreds of calls instead of tens of
 # thousands. Folder-scoped, incremental (resumable), rebuilds the snapshot.
-python -m career_history.cli extract-documents --folder "14. ST-Engg"
+python -m career_history.cli extract-documents --folder "14. Corp-A"
 
 # CHUNK-LEVEL extraction (per chunk → finest granularity, but infeasible on a
 # large corpus — one LLM call per chunk). Use only on small/targeted scopes.
-python -m career_history.cli graph-refresh --folder "14. ST-Engg" --limit 50
+python -m career_history.cli graph-refresh --folder "14. Corp-A" --limit 50
 python -m career_history.cli graph-status        # per-chunk extraction progress
 ```
 

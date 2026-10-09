@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from auditor.config import load_config
+from tests._cfg import auditor_config
 from auditor.constitution import FolderConstitution
 from auditor.findings import FindingsGenerator
 from auditor.models import FolderClassification, FolderRecord
@@ -56,30 +56,30 @@ def initiative_classification(name: str) -> FolderClassification:
 class InitiativeTypeInferenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         cls.constitution = FolderConstitution(config)
 
     def test_stage_children_imply_sales_opportunity(self) -> None:
         inferred = self.constitution.infer_initiative_type(
-            "1 AI Staff Training", ["A.1. RFI_RFP_RFQ", "A.2. Proposal"]
+            "1 Acme50 Orion Vega", ["A.1. RFI_RFP_RFQ", "A.2. Proposal"]
         )
         self.assertEqual(inferred, "sales_opportunity")
 
     def test_workshop_name_signal(self) -> None:
         inferred = self.constitution.infer_initiative_type(
-            "GenAI Trends Sharing", ["Materials", "Slides"]
+            "CL89 AI Workshop", ["Materials", "Slides"]
         )
         self.assertEqual(inferred, "workshop")
 
     def test_strategic_initiative_name_signal(self) -> None:
         inferred = self.constitution.infer_initiative_type(
-            "Strategy Forward", ["Discussions", "Planning"]
+            "CL89 Atlas66 Delta Roadmap Advisory", ["Discussions", "Planning"]
         )
         self.assertEqual(inferred, "strategic_initiative")
 
     def test_architecture_artifact_name_signal(self) -> None:
         inferred = self.constitution.infer_initiative_type(
-            "IVEE Architecture Diagram", []
+            "CL89 Reference Architecture Design Blueprint", []
         )
         self.assertEqual(inferred, "architecture_artifact")
 
@@ -89,7 +89,7 @@ class InitiativeTypeInferenceTests(unittest.TestCase):
 
     def test_registry_overrides_inference(self) -> None:
         registered = self.constitution.registered_initiative_type(
-            "01 Project/2026/01_IBF/1 AI Staff Training"
+            "01 Project/2026/01_CL89/1 Acme50 Orion Vega"
         )
         self.assertEqual(registered, "sales_opportunity")
 
@@ -107,7 +107,7 @@ class ArchetypeGatedTemplateTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         cls.constitution = FolderConstitution(config)
 
     def _findings_for(self, paths: list[str], initiative_path: str) -> list:
@@ -120,12 +120,12 @@ class ArchetypeGatedTemplateTests(unittest.TestCase):
         return generator._template_findings(folders, classifications)
 
     def test_workshop_initiative_gets_no_completeness_findings(self) -> None:
-        base = "01 Project/2026/01_IBF/GenAI Trends Sharing"
+        base = "01 Project/2026/01_CL89/Nova44 Zenith Atlas"
         findings = self._findings_for(
             [
                 "01 Project",
                 "01 Project/2026",
-                "01 Project/2026/01_IBF",
+                "01 Project/2026/01_CL89",
                 base,
                 f"{base}/Materials",
                 f"{base}/Slides",
@@ -136,7 +136,7 @@ class ArchetypeGatedTemplateTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_strategic_initiative_gets_no_completeness_findings(self) -> None:
-        base = "01 Project/2026/01_IBF/Strategy Forward"
+        base = "01 Project/2026/01_CL89/Nova54 Zenith"
         findings = self._findings_for(
             [base, f"{base}/Discussions", f"{base}/Planning", f"{base}/Deliverables"],
             base,
@@ -144,12 +144,12 @@ class ArchetypeGatedTemplateTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_artifact_initiative_gets_no_completeness_findings(self) -> None:
-        base = "01 Project/2026/01_IBF/IVEE Architecture Diagram"
+        base = "01 Project/2026/01_CL89/Zenith25 Atlas Delta"
         findings = self._findings_for([base], base)
         self.assertEqual(findings, [])
 
     def test_sales_opportunity_still_enforces_core_stages(self) -> None:
-        base = "01 Project/2026/01_IBF/1 AI Staff Training"
+        base = "01 Project/2026/01_CL89/1 Acme50 Orion Vega"
         findings = self._findings_for(
             [base, f"{base}/A.1. RFI_RFP_RFQ"],
             base,
@@ -163,7 +163,7 @@ class ArchetypeGatedTemplateTests(unittest.TestCase):
         # Even a workshop gets structural validation when stage-prefixed
         # folders actually exist (collisions, alias drift), without core
         # completeness demands.
-        base = "01 Project/2026/01_IBF/GenAI Trends Workshop"
+        base = "01 Project/2026/01_CL89/GenAI Trends Workshop"
         findings = self._findings_for(
             [
                 base,
@@ -181,7 +181,7 @@ class ArchetypeGatedTemplateTests(unittest.TestCase):
 class ReusableAssetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        config = load_config("config.yaml")
+        config = auditor_config()
         cls.constitution = FolderConstitution(config)
 
     def test_resources_inside_project_is_not_flagged(self) -> None:
@@ -189,21 +189,21 @@ class ReusableAssetTests(unittest.TestCase):
         # project self-containment working as designed, never leakage.
         generator = make_generator(self.constitution)
         folder = folder_record(
-            1, "01 Project/2026/01_IBF/Strategy Forward/Resources", file_count=4
+            1, "01 Project/2026/01_CL89/Nova54 Zenith/Resources", file_count=4
         )
         self.assertEqual(generator._reusable_asset_findings([folder], {}), [])
 
     def test_empty_resources_not_flagged(self) -> None:
         generator = make_generator(self.constitution)
         folder = folder_record(
-            1, "01 Project/2026/01_IBF/Strategy Forward/Resources", file_count=0
+            1, "01 Project/2026/01_CL89/Nova54 Zenith/Resources", file_count=0
         )
         self.assertEqual(generator._reusable_asset_findings([folder], {}), [])
 
     def test_templates_inside_project_is_not_flagged(self) -> None:
         generator = make_generator(self.constitution)
         folder = folder_record(
-            1, "01 Project/2026/01_IBF/Strategy Forward/Templates", file_count=9
+            1, "01 Project/2026/01_CL89/Nova54 Zenith/Templates", file_count=9
         )
         self.assertEqual(generator._reusable_asset_findings([folder], {}), [])
 

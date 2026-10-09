@@ -410,7 +410,7 @@ def resolve_entities_cmd(
     embeddings: bool = typer.Option(False, "--embeddings", help="Also merge on name-embedding similarity."),
     threshold: float = typer.Option(0.93, "--threshold"),
 ):
-    """Find duplicate entities ("ST Engg" / "ST Engineering") and fold them into one."""
+    """Find duplicate entities ("Nova Engg" / "Nova Engineering") and fold them into one."""
     from career_history import resolve
     result = resolve.resolve_entities(apply=apply, entity_types=entity_type,
                                       use_embeddings=embeddings, threshold=threshold)

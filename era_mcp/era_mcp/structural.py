@@ -95,7 +95,7 @@ def resolve_prefix(question: str) -> str | None:
     """Best-effort: map a question to an absolute path prefix to enumerate under.
 
     Matches a top-level folder named in the question, then greedily descends into
-    child folders also named in the question (e.g. "ST-Engg 01 Project 2026").
+    child folders also named in the question (e.g. "Corp-A 01 Project 2026").
     Returns None when nothing matches (caller then lists top-level folders).
     """
     q = (question or "").lower()

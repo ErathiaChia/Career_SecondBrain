@@ -82,8 +82,8 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(file_kind("mystery.bin"), "other")
 
     def test_name_signals(self):
-        self.assertIn("proposal", name_signals("RFP_MusimMas_Proposal.pptx"))
-        self.assertIn("demo", name_signals("HongLeong POC Demo.mov"))
+        self.assertIn("proposal", name_signals("RFP_Seg80_Proposal.pptx"))
+        self.assertIn("demo", name_signals("Seg79 POC Demo.mov"))
         self.assertEqual(name_signals("randomfile.pdf"), [])
 
     def test_confidence_bands(self):
@@ -99,25 +99,25 @@ class HelperTests(unittest.TestCase):
 class PatternExtractionTests(unittest.TestCase):
     def test_patterns_count_supporting_files(self):
         files = [
-            _file("01 Project/2026/IBF/A.2 Proposal/p1.pptx", customer="IBF", stage="proposal"),
-            _file("01 Project/2026/IBF/A.2 Proposal/p2.pptx", customer="IBF", stage="proposal"),
-            _file("01 Project/2026/IBF/A.2 Proposal/p3.pdf", customer="IBF", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p1.pptx", customer="CL89", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p2.pptx", customer="CL89", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p3.pdf", customer="CL89", stage="proposal"),
         ]
         engine = PlacementEngine(FakePlacementDB(files), FakeConfig())
         patterns = engine.extract_patterns()
         # Two file kinds (presentation x2, document x1) under one destination.
-        dest_patterns = [p for p in patterns if p.destination_path == "01 Project/2026/IBF/A.2 Proposal"]
+        dest_patterns = [p for p in patterns if p.destination_path == "01 Project/2026/CL89/A.2 Proposal"]
         self.assertTrue(dest_patterns)
         presentation = next(p for p in dest_patterns if p.file_kind == "presentation")
         self.assertEqual(presentation.support_count, 2)
 
     def test_exclude_paths_holds_out_files(self):
         files = [
-            _file("01 Project/IBF/x.pptx", customer="IBF"),
-            _file("01 Project/IBF/y.pptx", customer="IBF"),
+            _file("01 Project/CL89/x.pptx", customer="CL89"),
+            _file("01 Project/CL89/y.pptx", customer="CL89"),
         ]
         engine = PlacementEngine(FakePlacementDB(files), FakeConfig())
-        patterns = engine.extract_patterns(exclude_paths={"01 Project/IBF/x.pptx"})
+        patterns = engine.extract_patterns(exclude_paths={"01 Project/CL89/x.pptx"})
         total = sum(p.support_count for p in patterns)
         self.assertEqual(total, 1)
 
@@ -125,22 +125,22 @@ class PatternExtractionTests(unittest.TestCase):
 class PredictionTests(unittest.TestCase):
     def _engine(self):
         files = [
-            _file("01 Project/2026/IBF/A.2 Proposal/p1.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
-            _file("01 Project/2026/IBF/A.2 Proposal/p2.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
-            _file("01 Project/2026/HongLeong/B.2 POC/d1.pdf", customer="HongLeong", init_type="sales_opportunity", stage="poc"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p1.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p2.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
+            _file("01 Project/2026/Seg79/B.2 POC/d1.pdf", customer="Seg79", init_type="sales_opportunity", stage="poc"),
         ]
         return PlacementEngine(FakePlacementDB(files), FakeConfig())
 
     def test_predicts_matching_destination(self):
         engine = self._engine()
         pred = engine.predict(
-            "INBOX/IBF_Proposal_v2.pptx",
-            known_customer="IBF",
+            "INBOX/CL89_Proposal_v2.pptx",
+            known_customer="CL89",
             known_initiative_type="sales_opportunity",
             known_stage="proposal",
             use_embeddings=False,
         )
-        self.assertEqual(pred.predicted_path, "01 Project/2026/IBF/A.2 Proposal")
+        self.assertEqual(pred.predicted_path, "01 Project/2026/CL89/A.2 Proposal")
         self.assertEqual(pred.method, "deterministic")
         self.assertGreaterEqual(pred.confidence, SUGGEST_THRESHOLD)
 
@@ -153,8 +153,8 @@ class PredictionTests(unittest.TestCase):
             known_stage="proposal",
             use_embeddings=False,
         )
-        # No IBF/HongLeong pattern matches UnknownCo; cannot confidently place.
-        self.assertNotEqual(pred.predicted_path, "01 Project/2026/IBF/A.2 Proposal")
+        # No CL89/Seg79 pattern matches UnknownCo; cannot confidently place.
+        self.assertNotEqual(pred.predicted_path, "01 Project/2026/CL89/A.2 Proposal")
 
     def test_no_pattern_leaves_in_inbox(self):
         engine = PlacementEngine(FakePlacementDB([]), FakeConfig())
@@ -167,9 +167,9 @@ class PredictionTests(unittest.TestCase):
 class SimulationTests(unittest.TestCase):
     def test_simulation_scores_match_levels(self):
         files = [
-            _file("01 Project/2026/IBF/A.2 Proposal/p1.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
-            _file("01 Project/2026/IBF/A.2 Proposal/p2.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
-            _file("01 Project/2026/IBF/A.2 Proposal/p3.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p1.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p2.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p3.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
         ]
         db = FakePlacementDB(files)
         engine = PlacementEngine(db, FakeConfig())
@@ -183,29 +183,29 @@ class SimulationTests(unittest.TestCase):
     def test_match_level_initiative_vs_customer(self):
         self.assertEqual(
             PlacementEngine._match_level(
-                "01 Project/2026/IBF/A.2 Proposal",
-                "01 Project/2026/IBF/A.2 Proposal",
+                "01 Project/2026/CL89/A.2 Proposal",
+                "01 Project/2026/CL89/A.2 Proposal",
             ),
             "exact",
         )
         # Same root/year/customer/initiative, different stage -> initiative match.
         self.assertEqual(
             PlacementEngine._match_level(
-                "01 Project/2026/IBF/Training/A.3 Other",
-                "01 Project/2026/IBF/Training/A.2 Proposal",
+                "01 Project/2026/CL89/Training/A.3 Other",
+                "01 Project/2026/CL89/Training/A.2 Proposal",
             ),
             "initiative",
         )
         # Same root/year/customer, different initiative -> customer match.
         self.assertEqual(
             PlacementEngine._match_level(
-                "01 Project/2026/IBF/Workshop/A.1",
-                "01 Project/2026/IBF/Training/A.2 Proposal",
+                "01 Project/2026/CL89/Workshop/A.1",
+                "01 Project/2026/CL89/Training/A.2 Proposal",
             ),
             "customer",
         )
         self.assertEqual(
-            PlacementEngine._match_level("02 Ops/x", "01 Project/2026/IBF/A.2"),
+            PlacementEngine._match_level("02 Ops/x", "01 Project/2026/CL89/A.2"),
             "wrong",
         )
 
@@ -213,15 +213,15 @@ class SimulationTests(unittest.TestCase):
 class PlanTests(unittest.TestCase):
     def test_plan_inbox_records_no_moves(self):
         files = [
-            _file("01 Project/2026/IBF/A.2 Proposal/p1.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
-            _file("01 Project/2026/IBF/A.2 Proposal/p2.pptx", customer="IBF", init_type="sales_opportunity", stage="proposal"),
-            _file("00 Agent Inbox/IBF_Proposal.pptx"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p1.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
+            _file("01 Project/2026/CL89/A.2 Proposal/p2.pptx", customer="CL89", init_type="sales_opportunity", stage="proposal"),
+            _file("00 Agent Inbox/CL89_Proposal.pptx"),
         ]
         db = FakePlacementDB(files)
         engine = PlacementEngine(db, FakeConfig())
         plans = engine.plan_inbox(run_id=1, inbox_prefixes=("00",), use_embeddings=False)
         self.assertEqual(len(plans), 1)
-        self.assertEqual(plans[0].file_path, "00 Agent Inbox/IBF_Proposal.pptx")
+        self.assertEqual(plans[0].file_path, "00 Agent Inbox/CL89_Proposal.pptx")
         self.assertEqual(len(db.saved_plans), 1)
         self.assertIn("confidence_band", db.saved_plans[0])
 

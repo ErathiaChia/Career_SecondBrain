@@ -15,3 +15,16 @@ era_graph_web/dist/
 *.tar.gz
 /era
 era_graph_web/vite.config.d.ts
+
+# --- Private data: never commit (org policy — client/project names stay local) ---
+local/
+*.log
+era_auditor/reports/*
+!era_auditor/reports/.gitkeep
+era_auditor/auditor/rules/customer_registry.yaml
+era_auditor/auditor/rules/project_registry.yaml
+era_auditor/auditor/rules/decision_history.yaml
+eval/runs/
+.claude/settings.local.json
+*.local.json
+*.plist.local

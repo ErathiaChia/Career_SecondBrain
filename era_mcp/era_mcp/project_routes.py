@@ -85,7 +85,7 @@ async def find_reusable_assets(
 
 @router.get("/projects/{project}", operation_id="get_project")
 async def get_project(project: str) -> dict:
-    """Resolve a project by id, key, name, alias, or name fragment ("HLB", "IBF")."""
+    """Resolve a project by id, key, name, alias, or name fragment ("HLB", "CL89")."""
     return await run_in_threadpool(_project_or_404, project)
 
 

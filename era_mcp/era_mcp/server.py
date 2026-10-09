@@ -192,13 +192,7 @@ async def ask_vault(req: AskRequest) -> dict:
     #    retrieve + a single rerank against the user's ORIGINAL question. The main
     #    query uses the HyDE passage as embed text when present; sub-queries embed
     #    themselves. De-dup identical strings so nothing is embedded twice.
-    main_embed_text = understanding.get("hyde_doc") or search_query
-    plan: list[tuple[str, str]] = [(search_query, main_embed_text)]
-    seen = {search_query}
-    for s in sub_queries:
-        if s not in seen:
-            seen.add(s)
-            plan.append((s, s))
+    plan = retrieval.plan_queries(understanding, sub_queries)
     embeddings = await asyncio.gather(
         *[retrieval.embed_query(embed_text) for _, embed_text in plan]
     )
@@ -232,14 +226,15 @@ async def ask_vault(req: AskRequest) -> dict:
         for i, c in enumerate(chunks, start=1)
     ]
 
-    # 5) Synthesis — degrade to chunks-only if the LLM is unavailable.
+    # 5) Synthesis — fail loudly if the local LLM is unavailable (local-first:
+    # there is no cloud fallback). Callers that only want sources pass
+    # synthesize=false.
     answer = None
     if req.synthesize and chunks:
         try:
             answer = await _synthesize(req.query, chunks, graph)
         except llm.LLMUnavailable as e:
-            degraded = True
-            degraded_reason = f"llm_unavailable: {e}"
+            raise HTTPException(status_code=503, detail=llm.unavailable_detail(e))
     elif req.synthesize and not chunks:
         degraded = True
         degraded_reason = "no_results"
@@ -262,6 +257,7 @@ async def ask_vault(req: AskRequest) -> dict:
         # rerank_score only when the reranker succeeded; it silently falls back
         # to RRF order otherwise). rerank_backend reports the configuration.
         "reranked": bool(req.rerank and chunks and any("rerank_score" in c for c in chunks)),
+        "rerank_error": rerank.last_error(),
         "rerank_backend": rerank.status() if req.rerank else None,
     }
 
@@ -372,7 +368,15 @@ async def indexing_status(
     Returns a count of files in each processing stage.
     """
     summary = retrieval.status_summary(folder=folder)
-    return {"folder": folder, "summary": summary}
+    return {
+        "folder": folder,
+        "summary": summary,
+        "provider": llm.provider_status(),
+        "rerank": rerank.status(),
+        # False means the container is running on the inline fallback prompts
+        # (prompts/ not copied into the image) — see Dockerfile.
+        "prompts_loaded_from_files": agent.prompts_loaded_from_files(),
+    }
 
 
 @app.get("/folders", operation_id="list_folders")
@@ -390,7 +394,7 @@ async def list_folders_tree(
     ),
     question: Optional[str] = Query(
         default=None,
-        description="Natural-language scope, e.g. 'projects under ST-Engg 2026'.",
+        description="Natural-language scope, e.g. 'projects under Corp-A 2026'.",
     ),
 ) -> dict:
     """List the project/child folders under a path (or matched from a question),

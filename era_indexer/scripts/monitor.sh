@@ -7,7 +7,7 @@
 # Environment:
 #   ERA_PYTHON            python with era_indexer deps (default: python3)
 #   ERA_MONITOR_THRESHOLD attention score for the digest (default: 40)
-#   ERA_MONITOR_ARGS      extra args, e.g. "--skip-extract" or "--folder '14. ST-Engg'"
+#   ERA_MONITOR_ARGS      extra args, e.g. "--skip-extract" or "--folder '14. Corp-A'"
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
