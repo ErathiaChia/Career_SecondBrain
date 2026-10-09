@@ -531,6 +531,108 @@ def monitor_cmd(
                                          use_llm=not no_llm, threshold=threshold))
 
 
+@app.command("build-cards")
+def build_cards_cmd(
+    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
+    limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max cards to (re)build this run."),
+    backfill: bool = typer.Option(False, "--backfill", help="Only the one-off card-only LLM pass for already-extracted files."),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Re-assemble from stored inputs only (no model calls)."),
+    deadline: Optional[str] = typer.Option(None, "--deadline"),
+):
+    """Document Intelligence Cards: backfill missing cards (one cheap LLM call each),
+    re-assemble cards whose facts/entities/versions changed (no LLM), refresh relations."""
+    from career_history import cards
+    from career_history.weekly import parse_deadline
+    dl = parse_deadline(deadline)
+    if backfill:
+        _print_result("Card backfill", cards.backfill_cards(folder=folder, limit=limit, use_llm=not no_llm, deadline=dl))
+    else:
+        _print_result("Cards", cards.refresh_cards(folder=folder, limit=limit, use_llm=not no_llm,
+                                                   backfill_limit=limit or 500, deadline=dl))
+
+
+@app.command("card")
+def card_cmd(file_id: int = typer.Argument(..., help="file_registry id")):
+    """Print one document's intelligence card."""
+    from career_history import cards_db
+    card = cards_db.get_card(file_id)
+    if not card:
+        console.print(f"[yellow]no card for file {file_id}[/yellow]")
+        raise typer.Exit(code=1)
+    for k in ("embedding", "search_vector", "llm_card", "card_text"):
+        card.pop(k, None)
+    console.print(card)
+
+
+@app.command("relate-documents")
+def relate_documents_cmd(limit: Optional[int] = typer.Option(None, "--limit", "-n")):
+    """Recompute document -> document relations (version family, project siblings, similar cards)."""
+    from career_history import cards
+    _print_result("Relations", {"refreshed": cards.refresh_relations(limit=limit)})
+
+
+@app.command("career-refresh")
+def career_refresh_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p"),
+    llm: bool = typer.Option(False, "--llm", help="Allow an LLM role-inference pass (default: deterministic)."),
+    force: bool = typer.Option(False, "--force"),
+):
+    """Roles -> achievements -> skill evidence for every project (hash-gated)."""
+    from career_history import career
+    _print_result("Career", career.refresh_career(project_ref=project, use_llm=llm, force=force))
+
+
+@app.command("infer-roles")
+def infer_roles_cmd(project: Optional[str] = typer.Option(None, "--project", "-p")):
+    """Infer my role per project (PM/SA prior + evidence); low confidence -> proposed action."""
+    from career_history import career, intel_db
+    projects = [intel_db.get_project(project)] if project else intel_db.list_projects()
+    table = Table(title="Role inference")
+    table.add_column("Project"); table.add_column("Scores"); table.add_column("Proposed?")
+    for p in [x for x in projects if x]:
+        r = career.infer_roles(p)
+        table.add_row(p["name"], ", ".join(f"{k}={v}" for k, v in sorted(r["scores"].items(), key=lambda kv: -kv[1])[:3]),
+                      "yes" if r["proposed"] else "")
+    console.print(table)
+
+
+@app.command("achievements")
+def achievements_cmd(project: Optional[str] = typer.Option(None, "--project", "-p"),
+                     me_only: bool = typer.Option(True, "--me/--all")):
+    """List derived achievements with evidence fact ids."""
+    from career_history import career_db, intel_db
+    pid = intel_db.get_project(project)["id"] if project else None
+    table = Table(title="Achievements")
+    for col in ("Project", "Statement", "Metric", "Kind", "Conf", "Facts", "Status"):
+        table.add_column(col)
+    for a in career_db.list_achievements(pid, me_only=me_only):
+        table.add_row(str(a.get("project")), a["statement"][:90], str((a.get("metric") or {}).get("raw") or ""),
+                      str(a.get("outcome_kind")), f"{float(a['confidence']):.2f}",
+                      ",".join(map(str, a.get("evidence_fact_ids") or [])), a["status"])
+    console.print(table)
+
+
+@app.command("skills")
+def skills_cmd(limit: int = typer.Option(50, "--limit", "-n")):
+    """Technology / product evidence across projects where I held a role."""
+    from career_history import career_db
+    table = Table(title="Skill evidence")
+    for col in ("Skill", "Kind", "Project", "Role", "Mentions", "Strength"):
+        table.add_column(col)
+    for s in career_db.list_skills(limit):
+        table.add_row(s["skill"], s["skill_kind"], s["project"], str(s.get("role")), str(s["mention_count"]),
+                      f"{float(s['strength']):.2f}")
+    console.print(table)
+
+
+@app.command("confirm-role")
+def confirm_role_cmd(project: str = typer.Argument(...), role: str = typer.Option(..., "--role", "-r"),
+                     reject: bool = typer.Option(False, "--reject")):
+    """Confirm (or reject) my role on a project; settles the confirm_role proposed action."""
+    from career_history import career
+    _print_result("Role", career.confirm_role(project, role, reject=reject))
+
+
 @app.command("weekly")
 def weekly_cmd(
     kind: str = typer.Option("weekly", "--kind", help="weekly | manual | catchup | weekday_sync"),

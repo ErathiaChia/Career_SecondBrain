@@ -194,6 +194,11 @@ def resolve_entities(apply: bool = False, entity_types: Iterable[str] | None = N
     if apply:
         for m in merges:
             intel_db.merge_entity(m["source_id"], m["target_id"], m["method"], m["score"])
+        try:  # alias-named person entities fold into the configured "me"
+            from career_history import identity
+            identity.fold_aliases()
+        except Exception as e:  # noqa: BLE001
+            console.log(f"[yellow]identity fold skipped:[/yellow] {e}")
     by_method: dict[str, int] = defaultdict(int)
     for m in merges:
         by_method[m["method"]] += 1

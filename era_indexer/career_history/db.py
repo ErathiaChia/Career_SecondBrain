@@ -1373,6 +1373,7 @@ def cleanup_orphan_graph_rows() -> None:
                 SELECT 1 FROM relationships r
                  WHERE r.source_entity_id = e.id OR r.target_entity_id = e.id
              )
+             AND COALESCE(e.metadata ->> 'is_me', '') <> 'true'
         """))
 
 

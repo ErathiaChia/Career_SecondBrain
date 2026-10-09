@@ -68,6 +68,15 @@ def normalize_run_settings(run_settings: RunSettings | None = None) -> RunSettin
     return run_settings or run_everything()
 
 
+def me() -> dict[str, Any]:
+    """The vault owner (identity.py): name, aliases, default_roles, ai_keywords."""
+    return dict(get().get("me") or {})
+
+
+def extraction() -> dict[str, Any]:
+    return dict(get().get("extraction") or {})
+
+
 def v2() -> dict[str, Any]:
     return get().get("v2", {})
 

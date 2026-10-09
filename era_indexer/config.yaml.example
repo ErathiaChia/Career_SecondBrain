@@ -16,6 +16,16 @@ paths:
   ignore_subtrees:
     - "Z. AI_Notebook/Weekly"
 
+# Who "me" is (the vault owner). Facts whose owner is one of these names, or a
+# first-person reference, are attributed to one canonical person entity; roles,
+# achievements and skills are derived from it. See career_history/identity.py.
+me:
+  name: ""                       # e.g. "Jane Tan"
+  aliases: []                    # e.g. ["Jane", "JT", "jtan"]
+  default_roles: [project_manager, solution_architect]   # prior for role inference
+  role_prior_weight: 0.35
+  ai_keywords: [ai, llm, genai, agent, rag, "machine learning", chatbot, copilot]
+
 extraction:
   # Folders (top-level, as stored in file_registry.folder) extracted before the
   # rest of the backlog; within a folder most-recently-modified files go first.

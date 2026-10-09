@@ -369,6 +369,51 @@ Notes:
   `/facts/search`, `graph_only`, and `/knowledge/search` — no MCP change needed
   to see entities/relationships; facts get their own endpoints.
 
+## Document cards and the career ("me") layer
+
+**Document Intelligence Cards** (`document_cards`, migration 0017) — one compact
+searchable record per file: title, doc_type, summary, keywords, topics, the
+entities/people/customers/products/technologies mentioned, decisions, risks,
+actions, outcomes, dates, references and related documents (version family,
+project siblings, embedding neighbours), plus a card embedding and tsvector.
+The agent searches cards before loading passages.
+
+- New/modified files get their card from the **same** extraction call as the
+  facts (the prompt returns a `card` object; `DOC_EXTRACTOR_VERSION =
+  doc-entity-facts-v3`). Zero extra LLM calls.
+- Files extracted before cards existed get **one cheap card-only call**:
+  `python -m career_history.cli build-cards --backfill --limit 500` (run it over
+  a few evenings/weekends until `card_count` stops growing). Nothing re-extracts.
+- Cards whose facts/entities/versions moved are re-assembled with no LLM call
+  (`build-cards`, also the weekly `cards` stage). `card <file_id>` prints one.
+
+**Identity** — set `me:` in `config.yaml` (name, aliases, `default_roles`,
+`ai_keywords`). `discover` seeds a canonical person entity (`metadata.is_me`),
+folds alias-named person entities into it, and extraction attributes "I/my" and
+alias owners to it. Three new fact kinds: `contribution` (what a named person
+did, with an activity verb), `outcome` (a result + metric), `lesson`.
+
+**Career layer** (migration 0018): `role_assignments`, `achievements`,
+`skill_evidence`, derived deterministically per project and hash-gated:
+
+```bash
+python -m career_history.cli career-refresh          # roles -> achievements -> skills
+python -m career_history.cli infer-roles             # scores per project; thin evidence -> confirm_role action
+python -m career_history.cli proposed-actions        # see pending confirm_role items
+python -m career_history.cli confirm-role "<project>" --role solution_architect
+python -m career_history.cli achievements --project "<project>"
+python -m career_history.cli skills
+```
+
+Role scoring: PM/SA prior (decays with evidence) + contribution facts I own
+(led/managed→PM, designed/architected→SA, presented/sold→presales, built→engineer)
++ owned actions/commitments + `projects.owner` + MANAGES/OWNS relationships +
+the doc types of files that list me. Roles below 0.60 confidence raise one
+`confirm_role` proposed action per project; a confirmed role is never overwritten.
+`project_state` now carries the §13 record: `role`, `technologies`, `timeline`,
+`evidence_documents`, `outcomes`, `related_projects`, `is_ai_initiative`, and
+the LLM rollup adds cited `stage` and `business_problem`.
+
 ## Weekly pipeline (the weekend run)
 
 All expensive work happens in one tracked, deadline-bound, resumable run:

@@ -31,7 +31,7 @@ MAX_CHUNK_CHARS = 4500
 # scalable path for large vaults (~1 call/file vs tens of thousands of chunks).
 # Uses its own version so its per-file state in graph_extraction_state never
 # collides with chunk-level runs.
-DOC_EXTRACTOR_VERSION = "doc-entity-facts-v2"
+DOC_EXTRACTOR_VERSION = "doc-entity-facts-v3"  # v3: +contribution/outcome/lesson facts, document card, identity
 MAX_DOC_CHARS = 12000
 # Long files are split into MAX_DOC_CHARS windows (one call each) instead of being
 # truncated to their first window. Capped so one giant file cannot stall a run.
@@ -53,7 +53,13 @@ RELATIONSHIP_TYPES = {
 FACT_KINDS = {
     "decision", "commitment", "event",
     "requirement", "risk", "action_item", "open_question", "dependency", "milestone",
+    # Career layer (brief §12): what a named person did, what resulted, what was learned.
+    "contribution", "outcome", "lesson",
 }
+DOC_TYPES = ("proposal", "sow", "contract", "meeting_notes", "transcript", "architecture", "design", "plan",
+             "tracker", "status_report", "presentation", "pricing", "email", "readme", "report",
+             "spreadsheet", "training", "other")
+CARD_LIMITS = {"keywords": 8, "topics": 6, "outcomes": 8, "dates": 10, "references": 8, "summary_chars": 900}
 FACT_STATUSES = {
     "open", "in_progress", "done", "blocked", "cancelled",
     "proposed", "approved", "rejected", "mitigated",
@@ -375,7 +381,12 @@ def merge_extractions(parts: list[dict[str, list[dict[str, Any]]]]) -> dict[str,
         "entities": list(entities.values()),
         "relationships": list(relationships.values()),
         "facts": list(facts.values()),
+        "card": merge_cards([p.get("card") for p in parts if isinstance(p, dict)]),
     }
+
+
+class TruncatedOutput(RuntimeError):
+    """The model hit num_predict before closing the JSON (done_reason=length)."""
 
 
 def extract_document(
@@ -388,29 +399,42 @@ def extract_document(
     the whole document."""
     windows = split_windows(str(doc.get("content") or ""), window_chars, max_windows)
     base = {"file_name": doc.get("file_name"), "folder": doc.get("folder"),
-            "section_path": None, "metadata": {"file_type": doc.get("file_type")}}
+            "section_path": None, "metadata": {"file_type": doc.get("file_type"), "want_card": True}}
     parts: list[dict[str, list[dict[str, Any]]]] = []
     errors: list[str] = []
+
+    def retry_halves(chunk: dict[str, Any], window: str) -> None:
+        half = max(2000, len(window) // 2)
+        for sub in split_windows(window, half, 2):
+            try:
+                parts.append(extract_chunk({**chunk, "content": sub}, max_chars=half))
+            except Exception as sub_e:  # noqa: BLE001
+                errors.append(str(sub_e))
+
     for i, window in enumerate(windows, start=1):
         chunk = {**base, "content": window,
                  "section_path": f"window {i}/{len(windows)}" if len(windows) > 1 else None}
         try:
             parts.append(extract_chunk(chunk, max_chars=window_chars))
-        except (TimeoutError, RuntimeError) as e:
-            if "timed out" not in str(e).lower() and not isinstance(e, TimeoutError):
-                errors.append(str(e))
-                continue
-            half = max(2000, len(window) // 2)
-            for sub in split_windows(window, half, 2):
-                try:
-                    parts.append(extract_chunk({**chunk, "content": sub}, max_chars=half))
-                except Exception as sub_e:  # noqa: BLE001
-                    errors.append(str(sub_e))
-        except ValueError as e:
+        except (TimeoutError, TruncatedOutput) as e:
+            # Timed out, or the reply hit num_predict: both mean "too much for one
+            # call" -> two smaller calls.
             errors.append(str(e))
+            retry_halves(chunk, window)
+        except RuntimeError as e:
+            if "timed out" in str(e).lower():
+                retry_halves(chunk, window)
+            else:
+                errors.append(str(e))
+        except ValueError as e:
+            # Unparseable JSON is usually a truncated reply as well.
+            errors.append(str(e))
+            retry_halves(chunk, window)
     if not parts and errors:
         raise RuntimeError("; ".join(errors[:3]))
-    return merge_extractions(parts)
+    merged = merge_extractions(parts)
+    merged["windows"] = len(windows)
+    return merged
 
 
 def build_snapshot_payload(
@@ -672,9 +696,12 @@ def _persist_facts(
     same extraction. One bad fact never fails the chunk."""
     count = 0
     ids_by_statement: dict[str, int] = {}
+    from career_history import identity
     for fact in normalize_facts(facts):
         attributes = fact["attributes"]
         owner_id = _resolve_fact_entity(fact.get("owner"), "person", ids_by_key)
+        if owner_id is None and fact.get("owner"):
+            owner_id = identity.resolve_owner(fact["owner"])  # "I"/"my"/alias -> the me entity
         if fact.get("owner") and owner_id is None:
             attributes = {**attributes, "owner": fact["owner"]}
         try:
@@ -683,7 +710,8 @@ def _persist_facts(
                 statement=fact["statement"],
                 file_id=chunk["file_id"],
                 chunk_id=chunk["chunk_id"],
-                subject_entity_id=_resolve_fact_entity(fact.get("subject"), fact.get("subject_type"), ids_by_key),
+                subject_entity_id=(_resolve_fact_entity(fact.get("subject"), fact.get("subject_type"), ids_by_key)
+                                   or identity.resolve_owner(fact.get("subject"))),
                 object_entity_id=_resolve_fact_entity(fact.get("object"), fact.get("object_type"), ids_by_key),
                 project_entity_id=_resolve_fact_entity(fact.get("project"), "project", ids_by_key),
                 attributes=attributes,
@@ -713,7 +741,9 @@ def normalize_facts(facts: list[Any]) -> list[dict[str, Any]]:
         if not isinstance(fact, dict):
             continue
         kind = re.sub(r"[^a-z]+", "_", str(fact.get("kind") or "").strip().lower()).strip("_")
-        kind = {"action": "action_item", "question": "open_question", "task": "action_item"}.get(kind, kind)
+        kind = {"action": "action_item", "question": "open_question", "task": "action_item",
+                "achievement": "outcome", "result": "outcome", "learning": "lesson",
+                "retrospective": "lesson", "lessons_learned": "lesson", "lesson_learned": "lesson"}.get(kind, kind)
         statement = _clean_evidence(fact.get("statement"))
         if kind not in FACT_KINDS or not statement:
             continue
@@ -862,7 +892,18 @@ def _extract_with_ollama(
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         raise RuntimeError(f"Ollama request failed: {e}") from e
-    return _loads_json_object(body.get("response") or "{}")
+    raw = body.get("response") or "{}"
+    try:
+        parsed = _loads_json_object(raw)
+    except ValueError:
+        if body.get("done_reason") == "length":
+            raise TruncatedOutput("output truncated at num_predict (done_reason=length)")
+        raise
+    if body.get("done_reason") == "length":
+        # Parsed, but the tail is probably missing: treat as truncated so the
+        # caller retries with smaller windows.
+        raise TruncatedOutput("output truncated at num_predict (done_reason=length)")
+    return parsed
 
 
 def ollama_json_options() -> dict[str, Any]:
@@ -890,9 +931,17 @@ def _prompt(text: str, context: dict[str, Any], include_relationships: bool) -> 
     meta = context.get("metadata") or {}
     hint = doc_type_hint(meta.get("file_type"), context.get("file_name"))
     entity_types = "|".join(sorted(ENTITY_TYPES - {"document"}))
+    identity_line = _identity_line()
+    want_card = bool(meta.get("want_card"))
+    card_rule = ("- card: ONE compact summary of this text: title, doc_type (from the list), a 2-3 sentence "
+                 "summary, keywords (<=8), topics (<=6, lowercase), outcomes achieved (with metrics when stated), "
+                 "dates mentioned (YYYY-MM-DD + label) and references to other documents.\n") if want_card else ""
+    card_schema = ('  "card": {{"title": "string", "doc_type": "' + "|".join(DOC_TYPES) + '", "summary": "2-3 sentences", '
+                   '"keywords": [], "topics": [], "outcomes": [{{"statement": "string", "metric": "string"}}], '
+                   '"dates": [{{"date": "YYYY-MM-DD", "label": "string"}}], "references": []}},\n') if want_card else ""
     return f"""
 Extract a compact, provenance-ready project knowledge graph from this KB chunk.
-
+{identity_line}
 Allowed entity types: {", ".join(sorted(ENTITY_TYPES - {"document"}))}.
 Allowed relationship types: {", ".join(sorted(RELATIONSHIP_TYPES))}.
 Fact kinds: {", ".join(sorted(FACT_KINDS))}.
@@ -915,7 +964,11 @@ Rules:
   open_question = an unresolved question; owner = who must answer
   dependency    = subject depends on object (team, vendor, system, approval); attributes: dependency_type
   milestone     = a planned or reached checkpoint; occurred_at = target/actual date
-- topic: 1-4 lowercase words naming what the fact is about (e.g. "data migration",
+  contribution  = what a NAMED PERSON did (led, managed, planned, designed, architected, built, presented,
+                  sold, negotiated, delivered, advised, reviewed); owner = that person; attributes: activity (one of those verbs), role_hint
+  outcome       = a result that was achieved, with its metric when stated; attributes: metric, value, baseline, customer, outcome_kind (revenue|cost|time|quality|adoption|win|delivery|award)
+  lesson        = a lesson learned / retrospective insight; attributes: context
+{card_rule}- topic: 1-4 lowercase words naming what the fact is about (e.g. "data migration",
   "budget", "go-live"), so facts about the same thing can be compared.
 - status: one of {", ".join(sorted(FACT_STATUSES))}; omit if unstated.
 - priority: high|medium|low when stated or clearly implied (severity for risks).
@@ -929,7 +982,7 @@ Context:
 
 JSON schema:
 {{
-  "entities": [
+{card_schema}  "entities": [
     {{"name": "string", "type": "{entity_types}", "aliases": [], "mention_text": "string", "confidence": 0.0}}
   ],
   "relationships": [
@@ -945,11 +998,93 @@ Chunk:
 """.strip()
 
 
-def _normalize_extraction(parsed: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _identity_line() -> str:
+    """Tell the extractor who the vault owner is so first-person text is attributed."""
+    try:
+        me = config.me()
+    except Exception:  # noqa: BLE001
+        return ""
+    name = (me.get("name") or "").strip()
+    if not name:
+        return ""
+    aliases = ", ".join(str(a) for a in (me.get("aliases") or []) if str(a).strip())
+    return (f"The vault owner is {name}" + (f" (aliases: {aliases})" if aliases else "") +
+            ". First-person statements ('I', 'my', 'we led') refer to them; use their name as owner "
+            "for contributions, commitments and action items they made.\n")
+
+
+def _normalize_extraction(parsed: dict[str, Any]) -> dict[str, Any]:
+    card = parsed.get("card")
     return {
         "entities": parsed.get("entities", []) if isinstance(parsed.get("entities"), list) else [],
         "relationships": parsed.get("relationships", []) if isinstance(parsed.get("relationships"), list) else [],
         "facts": parsed.get("facts", []) if isinstance(parsed.get("facts"), list) else [],
+        "card": card if isinstance(card, dict) else {},
+    }
+
+
+def _dedupe_strs(values: Any, limit: int) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in values or []:
+        sv = _clean_name(v) if not isinstance(v, dict) else _clean_name(v.get("statement") or v.get("text") or v.get("label"))
+        if sv and sv.casefold() not in seen:
+            seen.add(sv.casefold())
+            out.append(sv)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def merge_cards(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pure: fold per-window cards into one. title/doc_type from the first window
+    that has them; summaries joined ("[1/3] ..."), capped; lists unioned and
+    deduped case-insensitively with CARD_LIMITS."""
+    cards = [c for c in cards if isinstance(c, dict) and c]
+    if not cards:
+        return {}
+    title = next((str(c.get("title")).strip() for c in cards if c.get("title")), None)
+    doc_type = next((str(c.get("doc_type")).strip().lower() for c in cards if c.get("doc_type")), None)
+    if doc_type not in DOC_TYPES:
+        doc_type = doc_type if doc_type else None
+    summaries = [str(c.get("summary") or "").strip() for c in cards if str(c.get("summary") or "").strip()]
+    if len(summaries) > 1:
+        summary = " ".join(f"[{i}/{len(summaries)}] {x}" for i, x in enumerate(summaries, 1))
+    else:
+        summary = summaries[0] if summaries else ""
+    summary = summary[:CARD_LIMITS["summary_chars"]]
+    outcomes: list[dict[str, Any]] = []
+    seen_o: set[str] = set()
+    for c in cards:
+        for o in c.get("outcomes") or []:
+            stmt = _clean_name(o.get("statement") if isinstance(o, dict) else o)
+            if stmt and stmt.casefold() not in seen_o:
+                seen_o.add(stmt.casefold())
+                outcomes.append({"statement": stmt, "metric": (o.get("metric") if isinstance(o, dict) else None) or None})
+            if len(outcomes) >= CARD_LIMITS["outcomes"]:
+                break
+    dates: list[dict[str, Any]] = []
+    seen_d: set[tuple[str, str]] = set()
+    for c in cards:
+        for d in c.get("dates") or []:
+            if not isinstance(d, dict):
+                d = {"date": d, "label": ""}
+            iso = _clean_ts(d.get("date"))
+            label = _clean_name(d.get("label"))[:80]
+            if iso and (iso, label.casefold()) not in seen_d:
+                seen_d.add((iso, label.casefold()))
+                dates.append({"date": iso, "label": label, "source": "llm"})
+            if len(dates) >= CARD_LIMITS["dates"]:
+                break
+    return {
+        "title": title,
+        "doc_type": doc_type,
+        "summary": summary,
+        "keywords": _dedupe_strs([k for c in cards for k in (c.get("keywords") or [])], CARD_LIMITS["keywords"]),
+        "topics": [t.lower() for t in _dedupe_strs([t for c in cards for t in (c.get("topics") or [])], CARD_LIMITS["topics"])],
+        "outcomes": outcomes,
+        "dates": dates,
+        "references": _dedupe_strs([r for c in cards for r in (c.get("references") or [])], CARD_LIMITS["references"]),
     }
 
 

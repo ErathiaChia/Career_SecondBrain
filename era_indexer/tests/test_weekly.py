@@ -82,6 +82,9 @@ def _wire(monkeypatch, extract_result):
     graph = types.SimpleNamespace(refresh_documents=lambda **kw: (calls.append("extract"), extract_result)[1])
     monkeypatch.setitem(sys.modules, "career_history.graph", graph)
     monkeypatch.setattr(pkg, "graph", graph, raising=False)
+    import career_history.cards as cards_mod, career_history.career as career_mod
+    monkeypatch.setattr(cards_mod, "refresh_cards", lambda **kw: calls.append(f"cards:{kw.get('use_llm')}"))
+    monkeypatch.setattr(career_mod, "refresh_career", lambda **kw: calls.append(f"career:{kw.get('use_llm')}"))
     monkeypatch.setattr(w.monitor, "build_digest", lambda threshold: (calls.append("digest"), {"digest_id": 9, "markdown": ""})[1])
     return calls, finished
 
@@ -90,8 +93,8 @@ def test_run_stage_order_and_finished(monkeypatch):
     calls, finished = _wire(monkeypatch, {"processed_documents": 3, "failed_documents": 0, "stopped_early": False})
     out = weekly.run(kind="manual", deadline="+2h", skip_sync=True, force_hours=True)
     assert out["status"] == "finished" and finished["status"] == "finished"
-    assert calls == ["start", "extract", "projects", "versions", "resolve", "changes:True", "conflicts",
-                     "stale", "similarity", "state:True", "digest"]
+    assert calls == ["start", "extract", "cards:True", "projects", "versions", "resolve", "changes:True",
+                     "conflicts", "stale", "similarity", "career:True", "state:True", "digest"]
     assert finished["counts"]["docs_extracted"] == 3 and finished["counts"]["docs_remaining"] == 7
 
 

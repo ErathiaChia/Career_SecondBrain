@@ -146,6 +146,11 @@ def discover(
         seed_entities.seed(folder=folder)
     except Exception as e:  # never let seeding break discovery
         console.log(f"[red]seed-entities failed[/red]: {e}")
+    try:
+        from career_history import identity
+        identity.seed_me()
+    except Exception as e:  # noqa: BLE001
+        console.log(f"[red]identity seed failed[/red]: {e}")
 
     # Keep projects and version chains in step with the folder tree (no LLM).
     try:

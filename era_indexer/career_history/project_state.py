@@ -94,10 +94,14 @@ def _list_field(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 def deterministic_state(project: dict[str, Any], facts: list[dict[str, Any]],
                         flags: dict[str, Any] | None = None,
-                        now: datetime | None = None) -> dict[str, Any]:
-    """State fields derivable from typed facts without an LLM."""
+                        now: datetime | None = None,
+                        extras: dict[str, Any] | None = None) -> dict[str, Any]:
+    """State fields derivable from typed facts without an LLM. ``extras`` (from
+    ``project_record_inputs``) adds the brief §13 project record: my role, the
+    technologies, a timeline, evidence documents, outcomes, related projects."""
     now = now or datetime.now()
     flags = flags or {"stale": {}, "conflicts": []}
+    extras = extras or {}
     stale = flags.get("stale", {})
     superseded = {f["supersedes_fact_id"] for f in facts if f.get("supersedes_fact_id")}
     live = [f for f in facts if f["id"] not in superseded]
@@ -145,6 +149,80 @@ def deterministic_state(project: dict[str, Any], facts: list[dict[str, Any]],
                       "confidence": 1.0, "sources": [], "last_verified": None},
         "fact_count": len(live),
         "superseded_count": len(superseded),
+        **project_record(project, items, extras),
+    }
+
+
+def project_record(project: dict[str, Any], items: list[dict[str, Any]], extras: dict[str, Any]) -> dict[str, Any]:
+    """Brief §13: role, technologies, timeline, evidence, outcomes, related."""
+    roles = extras.get("roles") or []
+    confirmed = [r for r in roles if r.get("status") == "confirmed"]
+    best = (confirmed or sorted(roles, key=lambda r: -float(r.get("confidence") or 0))[:1] or [None])[0]
+    role = {"value": best["role"] if best else UNKNOWN,
+            "confidence": round(float(best["confidence"]), 3) if best else 0.0,
+            "status": best.get("status") if best else None,
+            "sources": list(best.get("sources") or [])[:8] if best else [],
+            "last_verified": _iso(best.get("updated_at")) if best else None}
+    techs = [{"entity_id": t["entity_id"], "name": t["name"], "type": t.get("entity_type"),
+              "mentions": int(t.get("mention_count") or 0)} for t in (extras.get("technologies") or [])[:15]]
+    timeline: list[dict[str, Any]] = []
+    for i in items:
+        when = i.get("due") if i["kind"] in ("milestone", "action_item", "commitment") else None
+        occurred = None
+        src = extras.get("facts_by_id", {}).get(i["fact_id"]) if extras.get("facts_by_id") else None
+        if src is not None:
+            occurred = _iso(src.get("occurred_at"))
+        when = (occurred or "")[:10] or when
+        if when and i["kind"] in ("event", "milestone", "decision", "outcome", "contribution", "commitment"):
+            timeline.append({"date": when, "kind": i["kind"], "statement": i["statement"], "fact_id": i["fact_id"],
+                             "status": i.get("status")})
+    for e in extras.get("events") or []:
+        ts = _iso(e.get("detected_at"))
+        if ts:
+            timeline.append({"date": ts[:10], "kind": f"file_{e['kind']}", "statement": e.get("file_name"),
+                             "file_id": e.get("file_id")})
+    timeline.sort(key=lambda t: t["date"])
+    evidence = [{"file_id": c["file_id"], "file_name": c.get("file_name"), "title": c.get("title"),
+                 "doc_type": c.get("doc_type"), "summary": (c.get("summary") or "")[:300],
+                 "fact_count": int(c.get("fact_count") or 0)} for c in (extras.get("cards") or [])[:12]]
+    outcomes = [{"achievement_id": a["id"], "statement": a["statement"], "metric": a.get("metric"),
+                 "outcome_kind": a.get("outcome_kind"), "is_me": a.get("is_me"), "confidence": float(a.get("confidence") or 0),
+                 "evidence_fact_ids": a.get("evidence_fact_ids") or []}
+                for a in (extras.get("achievements") or [])[:15]]
+    related = [{"project_id": r["project_id"], "name": r.get("name"), "score": float(r.get("score") or 0),
+                "shared_entities": r.get("shared_entities")} for r in (extras.get("related_projects") or [])[:5]]
+    ai_words = [str(w).lower() for w in (extras.get("ai_keywords") or [])]
+    haystack = " ".join([t["name"].lower() for t in techs] + [str(project.get("name") or "").lower()] +
+                        [str(t).lower() for c in (extras.get("cards") or []) for t in (c.get("topics") or [])])
+    is_ai = any(w in haystack for w in ai_words) if ai_words else False
+    return {
+        "role": role,
+        "technologies": {"value": techs, "confidence": 1.0 if techs else 0.0, "sources": [], "last_verified": None},
+        "timeline": {"value": timeline[-80:], "confidence": 1.0 if timeline else 0.0, "sources": [], "last_verified": None},
+        "evidence_documents": {"value": evidence, "confidence": 1.0 if evidence else 0.0, "sources": [], "last_verified": None},
+        "outcomes": {"value": outcomes, "confidence": round(sum(o["confidence"] for o in outcomes) / len(outcomes), 3) if outcomes else 0.0,
+                     "sources": [{"fact_id": fid} for o in outcomes for fid in o["evidence_fact_ids"][:2]][:8], "last_verified": None},
+        "related_projects": {"value": related, "confidence": 1.0 if related else 0.0, "sources": [], "last_verified": None},
+        "is_ai_initiative": is_ai,
+    }
+
+
+def project_record_inputs(project_id: int) -> dict[str, Any]:
+    """Load the §13 extras (all optional tables; empty when not built yet)."""
+    from career_history import career_db, cards_db, config
+    try:
+        ai_keywords = (config.me() or {}).get("ai_keywords") or []
+    except Exception:  # noqa: BLE001
+        ai_keywords = []
+    return {
+        "roles": career_db.list_roles(project_id, me_only=True),
+        "technologies": career_db.project_technology_mentions(project_id)
+        if career_db.table_exists("project_files") else [],
+        "events": cards_db.project_events(project_id),
+        "cards": cards_db.project_cards(project_id),
+        "achievements": career_db.list_achievements(project_id),
+        "related_projects": cards_db.related_projects(project_id),
+        "ai_keywords": ai_keywords,
     }
 
 
@@ -213,6 +291,8 @@ You maintain the state of a work project. Using ONLY the numbered facts below,
 return JSON:
 {{
   "phase": {{"value": "discovery|proposal|planning|design|build|testing|deployment|support|closed|unknown", "source_fact_ids": [], "confidence": 0.0}},
+  "stage": {{"value": "opportunity|poc|architecture|delivery|support|closed|unknown", "source_fact_ids": [], "confidence": 0.0}},
+  "business_problem": {{"value": "one sentence: the customer problem this project addresses", "source_fact_ids": [], "confidence": 0.0}},
   "objectives": [{{"value": "short objective", "source_fact_ids": [], "confidence": 0.0}}],
   "priorities": [{{"value": "short priority", "source_fact_ids": [], "confidence": 0.0}}],
   "summary": {{"value": "2-3 sentence current status", "source_fact_ids": [], "confidence": 0.0}}
@@ -254,7 +334,7 @@ def validate_rollup(raw: dict[str, Any], facts_by_id: dict[int, dict[str, Any]],
         return _field(str(value).strip(), items, min(base, conf) if conf is not None else base)
 
     out: dict[str, Any] = {}
-    for key in ("phase", "summary"):
+    for key in ("phase", "summary", "stage", "business_problem"):
         f = cited(raw.get(key))
         out[key] = f or {"value": UNKNOWN, "confidence": 0.0, "sources": [], "last_verified": None}
     for key in ("objectives", "priorities"):
@@ -280,6 +360,11 @@ def source_hash(project: dict[str, Any], facts: list[dict[str, Any]], counts: di
         "o": sorted(i["fact_id"] for i in state["overdue"]["value"]),
         "u": sorted(i["fact_id"] for i in state["upcoming_milestones"]["value"]),
         "a": health["dimensions"]["activity"]["level"],
+        "r": [state.get("role", {}).get("value"), state.get("role", {}).get("status")],
+        "t": [t["entity_id"] for t in state.get("technologies", {}).get("value", [])],
+        "ach": sorted(o["achievement_id"] for o in state.get("outcomes", {}).get("value", [])),
+        "rel": sorted(r["project_id"] for r in state.get("related_projects", {}).get("value", [])),
+        "ev": sorted(e["file_id"] for e in state.get("evidence_documents", {}).get("value", [])),
     }
     return hashlib.sha256(json.dumps(key, default=str, sort_keys=True).encode()).hexdigest()
 
@@ -291,7 +376,13 @@ def build_state(project: dict[str, Any], use_llm: bool = True,
     facts = intel_db.project_facts(project["id"])
     flags = intel_db.project_flags(project["id"])
     counts = intel_db.project_counts(project["id"])
-    state = deterministic_state(project, facts, flags)
+    try:
+        extras = project_record_inputs(project["id"])
+    except Exception as e:  # noqa: BLE001 — the record is additive
+        console.log(f"[yellow]project record inputs skipped for {project['name']}:[/yellow] {e}")
+        extras = {}
+    extras["facts_by_id"] = {f["id"]: f for f in facts}
+    state = deterministic_state(project, facts, flags, extras=extras)
     state["counts"] = counts
     health = compute_health(project, state, counts)
     digest = source_hash(project, facts, counts, state, health)
@@ -305,7 +396,7 @@ def build_state(project: dict[str, Any], use_llm: bool = True,
             model = llm._model()
         except llm.LLMError as e:
             console.log(f"[yellow]State rollup skipped for {project['name']}:[/yellow] {e}")
-    for key in ("phase", "summary"):
+    for key in ("phase", "summary", "stage", "business_problem"):
         state.setdefault(key, {"value": UNKNOWN, "confidence": 0.0, "sources": [], "last_verified": None})
     for key in ("objectives", "priorities"):
         state.setdefault(key, {"value": [], "confidence": 0.0, "sources": [], "last_verified": None})
