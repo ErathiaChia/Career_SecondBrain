@@ -33,10 +33,22 @@ extraction:
   # Weekly cap (also --max-docs). ~85 s/file -> 1200 ≈ 28 h.
   max_docs_per_run: 1200
 
+reports:
+  # Where the weekly CAREER INTELLIGENCE report is written (ERA_REPORT_DIR overrides).
+  weekly_dir: "~/Library/Application Support/era/reports"
+  # Also copy it into the vault (excluded from ingestion via paths.ignore_subtrees).
+  publish_to_vault: false
+  vault_subdir: "Z. AI_Notebook/Weekly"
+
 eval:
   # Write a probe file into the vault before each run so the scorecard can
-  # verify new documents reach the index (Phase 4).
+  # verify new documents reach the index.
   freshness_probe_enabled: false
+  # The weekly eval stage runs era_mcp's scorecard against this server with the
+  # question sets under local/eval (git-ignored) and stores runs in runs_dir.
+  base_url: "http://localhost:8808"
+  # sets_dir: "<repo>/local/eval"
+  # runs_dir: "<repo>/local/eval/runs"
 
 models:
   # ---- Ollama embedding ----

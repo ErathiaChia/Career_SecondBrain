@@ -167,3 +167,146 @@ def run(folder: str | None = None, skip_sync: bool = False, skip_extract: bool =
     summary = {name: ("ok" if r["ok"] else r["error"]) for name, r in results.items()}
     summary["digest_items"] = digest.get("kept", 0)
     return summary
+
+
+# --- Weekly change-intelligence report (brief §16) ----------------------------------
+
+SECTION_RULE = "──────────────"
+
+
+def _bullet(text: str, limit: int = 160) -> str:
+    text = " ".join(str(text or "").split())
+    return "• " + (text if len(text) <= limit else text[: limit - 1] + "…")
+
+
+def render_weekly_report(inputs: dict[str, Any], generated: datetime | None = None,
+                         attention: str | None = None, max_items: int = 12) -> str:
+    """The fixed-heading report the brief asks for. ``inputs`` comes from
+    ``intel_db.weekly_inputs``; ``attention`` is the scored digest appended as an
+    extended section."""
+    generated = generated or datetime.now()
+    run = inputs.get("run") or {}
+    window = inputs.get("window") or {}
+    lines = ["CAREER INTELLIGENCE WEEKLY UPDATE",
+             f"Week {str(window.get('since') or '')[:10]} – {generated:%Y-%m-%d} · run {run.get('run_id') or '-'} · "
+             f"{run.get('status') or '-'} · generated {generated:%Y-%m-%d %H:%M}", ""]
+
+    def section(title: str, body: list[str]) -> None:
+        lines.extend([title, SECTION_RULE])
+        lines.extend(body if body else ["(none)"])
+        lines.append("")
+
+    counts = inputs.get("event_counts") or {}
+    section("NEW FILES", [str(counts.get("added", 0))])
+    section("MODIFIED", [str(counts.get("modified", 0) + counts.get("version_added", 0) + counts.get("restored", 0))])
+    section("NEW PROJECT INFORMATION",
+            [_bullet(f"{r['project']} — {r.get('new_docs', 0)} new doc(s), {r.get('new_facts', 0)} new fact(s), "
+                     f"{r.get('new_decisions', 0)} decision(s)") for r in (inputs.get("project_info") or [])[:max_items]])
+    section("NEW DECISIONS",
+            [_bullet(f"[F{d['id']}] {d['statement']} — {d.get('project') or '-'} · {d.get('file_name') or ''} · "
+                     f"{str(d.get('occurred_at') or d.get('created_at') or '')[:10]}")
+             for d in (inputs.get("new_decisions") or [])[:max_items]])
+    section("NEW ACHIEVEMENTS",
+            [_bullet(f"[A{a['id']}] {a['statement']}" + (f" [{(a.get('metric') or {}).get('raw')}]" if (a.get('metric') or {}).get('raw') else "")
+                     + f" — {a.get('project') or '-'}" + (" (mine)" if a.get("is_me") else ""))
+             for a in (inputs.get("new_achievements") or [])[:max_items]])
+    section("CHANGED INFORMATION",
+            [_bullet(f"{c.get('project') or '-'}: {c.get('summary')}" +
+                     (f" — {c['impact'].get('summary')}" if isinstance(c.get("impact"), dict) and c["impact"].get("summary") else ""))
+             for c in (inputs.get("changed_information") or [])[:max_items]])
+    section("CONFLICTS",
+            [_bullet(f"{c.get('project') or '-'}: '{c.get('statement_a')}' vs '{c.get('statement_b')}' — {c.get('conflict_type')}"
+                     + (f", likely latest [F{c['likely_latest_fact_id']}]" if c.get("likely_latest_fact_id") else "") + f" (#{c['id']})")
+             for c in (inputs.get("conflicts") or [])[:max_items]]
+            + ([f"({inputs.get('open_conflicts_total')} open in total)"] if inputs.get("open_conflicts_total") else []))
+    section("STALE INFORMATION",
+            [_bullet(f"{s_.get('project') or '-'}: {s_.get('statement')} — {s_.get('reason')}"
+                     + (f" (newer: [F{s_['newer_evidence_id']}])" if s_.get("newer_evidence_id") else ""))
+             for s_ in (inputs.get("stale") or [])[:max_items]])
+
+    lines.append(SECTION_RULE + " (extended)")
+    section("DELETED FILES", [str(counts.get("deleted", 0))] +
+            [_bullet(d.get("file_name") or d.get("file_path")) for d in (inputs.get("deleted") or [])[:6]])
+    pc = (run.get("counts") or {})
+    section("PIPELINE", [_bullet(f"{run.get('kind') or '-'} run {run.get('run_id') or '-'}: {run.get('status') or '-'}; "
+                                 f"extracted {pc.get('docs_extracted', 0)}, failed {pc.get('docs_failed', 0)}, "
+                                 f"backlog {pc.get('docs_remaining', '-')}, deadline hit: {pc.get('deadline_hit', False)}")])
+    ev = inputs.get("eval") or {}
+    if ev:
+        section("EVAL TREND", [_bullet(f"{k}: {v}") for k, v in ev.items()])
+    if attention:
+        lines.extend(["ATTENTION ITEMS", SECTION_RULE])
+        lines.extend(attention.strip().splitlines()[2:] or ["(none)"])
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_weekly_report(run_id: str | None = None, threshold: int = 40, save: bool = True,
+                        since_days_fallback: int = 7) -> dict[str, Any]:
+    """Weekly report (§16) + the scored attention digest, saved as digests.kind='weekly'
+    and, when configured, as a markdown file (reports.weekly_dir / vault)."""
+    inputs = intel_db.weekly_inputs(run_id, since_days_fallback)
+    try:
+        inputs["eval"] = _eval_trend()
+    except Exception:  # noqa: BLE001
+        inputs["eval"] = {}
+    items = score_items(intel_db.digest_inputs(since_days_fallback))
+    attention = render_digest(items, threshold)
+    markdown = render_weekly_report(inputs, attention=attention)
+    kept = [i for i in items if i["score"] >= threshold]
+    stats = {"candidates": len(items), "kept": len(kept), "threshold": threshold,
+             "new_files": (inputs.get("event_counts") or {}).get("added", 0),
+             "modified": (inputs.get("event_counts") or {}).get("modified", 0),
+             "new_decisions": len(inputs.get("new_decisions") or []),
+             "new_achievements": len(inputs.get("new_achievements") or []),
+             "conflicts": len(inputs.get("conflicts") or []), "stale": len(inputs.get("stale") or [])}
+    digest_id = intel_db.save_digest(kept, markdown, stats, kind="weekly", run_id=run_id) if save else None
+    path = _publish_report(markdown) if save else None
+    return {"digest_id": digest_id, "markdown": markdown, "path": path, **stats}
+
+
+def _eval_trend() -> dict[str, Any]:
+    """Latest two scorecard runs from local/eval/runs, as 'now (prev)' strings."""
+    import json
+    from pathlib import Path
+    from career_history import config
+    runs_dir = Path((config.get().get("eval") or {}).get("runs_dir") or
+                    Path(__file__).resolve().parents[2] / "local" / "eval" / "runs")
+    files = sorted(runs_dir.glob("*.json"))[-2:] if runs_dir.exists() else []
+    if not files:
+        return {}
+    cur = json.loads(files[-1].read_text())
+    prev = json.loads(files[-2].read_text()) if len(files) > 1 else {}
+    out: dict[str, Any] = {}
+    for suite, res in (cur.get("suites") or {}).items():
+        now_s = res.get("score")
+        prev_s = ((prev.get("suites") or {}).get(suite) or {}).get("score")
+        gate = "" if res.get("hard_gate_passed", True) else " HARD GATE FAILED"
+        out[suite] = f"{now_s} (prev {prev_s})" + gate if now_s is not None else "n/a"
+    return out
+
+
+def _publish_report(markdown: str) -> str | None:
+    import os
+    from pathlib import Path
+    from career_history import config
+    cfg = config.get().get("reports") or {}
+    out_dir = os.environ.get("ERA_REPORT_DIR") or cfg.get("weekly_dir") or "~/Library/Application Support/era/reports"
+    path = Path(os.path.expanduser(out_dir)) / f"CAREER_WEEKLY_{datetime.now():%Y-%m-%d}.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(markdown, encoding="utf-8")
+    except OSError as e:
+        console.log(f"[yellow]weekly report not written to {path}:[/yellow] {e}")
+        return None
+    if cfg.get("publish_to_vault"):
+        roots = [r for r in config.get_source_directories() if os.path.isdir(r)]
+        if roots:
+            vault_path = Path(roots[0]) / (cfg.get("vault_subdir") or "Z. AI_Notebook/Weekly") / path.name
+            try:
+                vault_path.parent.mkdir(parents=True, exist_ok=True)
+                vault_path.write_text(markdown, encoding="utf-8")
+            except OSError as e:
+                console.log(f"[yellow]weekly report not published to vault:[/yellow] {e}")
+    return str(path)
+

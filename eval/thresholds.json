@@ -1,0 +1,8 @@
+{
+  "_comment": "Pass criteria per suite (brief §23). 'hard' gates make the scorecard exit 1 (the weekly run records it, never aborts). Ratchet after the first baseline.",
+  "retrieval": {"hit_at_5": 0.8, "mrr": 0.5},
+  "project":   {"overall": 0.7},
+  "career":    {"project_hit": 0.8, "fact_recall": 0.6, "evidence": 0.75, "traceability": 1.0, "boundedness": 1.0, "hard": ["traceability", "boundedness"]},
+  "agent":     {"fast_p50_s": 30, "fast_llm_calls_max": 2, "boundedness": 1.0, "local_first": 1.0, "hard": ["boundedness", "local_first"]},
+  "freshness": {"pass": 1.0, "hard": ["pass"]}
+}

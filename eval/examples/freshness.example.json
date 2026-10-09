@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to local/eval/freshness.json. The weekly run writes a probe file containing its run id into the vault before sync (config eval.freshness_probe_enabled). The scorecard searches for the run id token (passed with --run-id) and expects the probe file in the top results.",
+  "base_url": "http://localhost:8808",
+  "probe_path_contains": "freshness_probe"
+}

@@ -86,6 +86,12 @@ def _wire(monkeypatch, extract_result):
     monkeypatch.setattr(cards_mod, "refresh_cards", lambda **kw: calls.append(f"cards:{kw.get('use_llm')}"))
     monkeypatch.setattr(career_mod, "refresh_career", lambda **kw: calls.append(f"career:{kw.get('use_llm')}"))
     monkeypatch.setattr(w.monitor, "build_digest", lambda threshold: (calls.append("digest"), {"digest_id": 9, "markdown": ""})[1])
+    monkeypatch.setattr(w.monitor, "build_weekly_report",
+                        lambda run_id, threshold: (calls.append("digest"), {"digest_id": 9, "markdown": ""})[1])
+    import career_history.evalrun as evalrun_mod
+    monkeypatch.setattr(evalrun_mod, "run_weekly_eval", lambda run_id=None, **kw: (calls.append("eval"), {"scores": {"career": 0.8}, "hard_gates_passed": True})[1])
+    import career_history.evalprobe as probe_mod
+    monkeypatch.setattr(probe_mod, "arm", lambda run_id: None)
     return calls, finished
 
 
@@ -94,8 +100,9 @@ def test_run_stage_order_and_finished(monkeypatch):
     out = weekly.run(kind="manual", deadline="+2h", skip_sync=True, force_hours=True)
     assert out["status"] == "finished" and finished["status"] == "finished"
     assert calls == ["start", "extract", "cards:True", "projects", "versions", "resolve", "changes:True",
-                     "conflicts", "stale", "similarity", "career:True", "state:True", "digest"]
+                     "conflicts", "stale", "similarity", "career:True", "state:True", "eval", "digest"]
     assert finished["counts"]["docs_extracted"] == 3 and finished["counts"]["docs_remaining"] == 7
+    assert finished["counts"]["eval"] == {"scores": {"career": 0.8}, "hard_gates_passed": True}
 
 
 def test_run_partial_when_deadline_hit_and_post_stages_go_no_llm(monkeypatch):
@@ -111,7 +118,7 @@ def test_catchup_skips_when_not_needed(monkeypatch):
     monkeypatch.setattr(w.intel_db, "latest_pipeline_run",
                         lambda kinds=None: {"status": "finished", "started_at": datetime.now()})
     out = weekly.run(catchup=True, deadline="+1h")
-    assert out.get("skipped") is True and "extract" not in calls
+    assert out.get("skipped") is True and "extract" not in calls and "eval" not in calls
 
 
 def test_interactive_hours_guard(monkeypatch):

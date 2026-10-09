@@ -23,7 +23,8 @@ def _paths(app):
         r = stack.pop()
         if hasattr(r, "methods") and getattr(r, "path", None):
             out.add(r.path)
-        stack.extend(getattr(r, "routes", None) or [])
+        inner = getattr(r, "original_router", None) or r   # FastAPI >= 0.140 keeps included routers nested
+        stack.extend(getattr(inner, "routes", None) or [])
     return out
 
 

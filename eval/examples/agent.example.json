@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to local/eval/agent.json. Fast questions should answer in one pass (route=fast, iterations=0, llm_calls<=2); investigate questions must stay within the budget (iterations<=3, tool_calls<=9); digest questions use no LLM; insufficient questions must come back sufficient=false with gaps (never fabricate).",
+  "base_url": "http://localhost:8808",
+  "questions": [
+    {"id": "fast-1", "kind": "fast", "query": "When is the REPLACE go-live date?", "expect_route": "fast"},
+    {"id": "fast-2", "kind": "fast", "query": "Who is the client contact for REPLACE?", "expect_route": "fast"},
+    {"id": "inv-1", "kind": "investigate", "query": "Compare the last two versions of the REPLACE proposal.", "expect_tools_any": ["compare_documents", "find_latest_version"]},
+    {"id": "inv-2", "kind": "investigate", "query": "Are there conflicting statements about REPLACE pricing?", "expect_tools_any": ["find_conflicts", "trace_decision"]},
+    {"id": "digest-1", "kind": "digest", "query": "What changed this week?", "expect_route": "digest"},
+    {"id": "insufficient-1", "kind": "insufficient", "query": "What was the exact headcount of the REPLACE vendor's QA team in 2019?", "expect_sufficient": false}
+  ]
+}

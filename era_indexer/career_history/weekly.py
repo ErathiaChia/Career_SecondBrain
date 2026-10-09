@@ -224,6 +224,13 @@ def run(
             pass
 
     hb("sync")
+    try:  # freshness probe (brief §23): a vault file carrying this run id
+        from career_history import evalprobe
+        probe = evalprobe.arm(run_id)
+        if probe:
+            counts["freshness_probe"] = probe
+    except Exception as e:  # noqa: BLE001
+        console.log(f"[yellow]freshness probe skipped:[/yellow] {e}")
     if not skip_sync:
         def sync() -> dict[str, Any]:
             from career_history import discover, runner
@@ -281,6 +288,9 @@ def run(
     if kind != "catchup":
         hb("eval")
         _optional_stage(results, "eval", "career_history.evalrun", "run_weekly_eval", run_id=run_id)
+        ev = (results.get("eval") or {}).get("result") or {}
+        if ev.get("scores"):
+            counts["eval"] = {"scores": ev["scores"], "hard_gates_passed": ev.get("hard_gates_passed")}
     hb("digest")
     monitor._stage(results, "digest", lambda: _build_report(run_id, threshold))
     digest = (results["digest"].get("result") or {}) if results["digest"]["ok"] else {}

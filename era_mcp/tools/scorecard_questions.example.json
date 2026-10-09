@@ -10,7 +10,7 @@
     {
       "id": "ibf-rfp",
       "query": "CL89 programme accreditation AI agents RFP",
-      "expect_path_contains": ["rfp-tdt-2025-0006", "01_CL89"]
+      "expect_path_contains": ["rfp-2025-0001", "01_CL89"]
     },
     {
       "id": "list-projects",

@@ -154,6 +154,24 @@ Career_SecondBrain/
 └── local/                GIT-IGNORED private data (see below)
 ```
 
+## Operating it (runbook)
+
+| When | What | Where |
+|---|---|---|
+| Once | `python -m career_history.cli migrate`; set `me:` in `era_indexer/config.yaml`; `bash era_indexer/launchd/install.sh` | Mac |
+| Once | `docker compose up -d --build` in `era_mcp/` (`.env` holds `API_BEARER_TOKEN`, `NAS_HOST`, `MAC_HOST`) | NAS |
+| Once | Connect clients — see `docs/clients/` (Open WebUI OpenAPI, Claude Code / Codex MCP at `/mcp`) | — |
+| Saturday 01:00 (launchd) | `scripts/weekly.sh`: sync → extract (capped, deadline Mon 05:00) → cards → projects/changes/conflicts/stale/similarity → career → state → eval → weekly report | Mac |
+| Monday | Read the report: `CAREER INTELLIGENCE WEEKLY UPDATE` (`/digest/latest`, `~/Library/Application Support/era/reports/`, or ask "what changed this week?") | any client |
+| Monday | Settle what needs you: `cli proposed-actions` (confirm roles, approve actions), `cli resolve-conflict <id> --status confirmed` | Mac |
+| Any time | "Is this current?" → `pipeline_status`; backlog after a bulk import → `weekly.sh --catchup` (also Sun–Thu 23:00) | — |
+| After an extractor change | `cli extract-documents --upgrade --folder <key project>` (never automatic) | Mac |
+| Weekly / on change | `make check-models`, `make test`, `make eval BASE_URL=http://nas:8808` | Mac |
+
+Phase status against the brief (`local/V4_Agent.md`): 0 hygiene ✓, 1 foundation ✓,
+2 cards + career layer ✓, 3 bounded agent + MCP ✓, 4 weekly report + eval ✓,
+5 career features (STAR builder, comparisons) — see `docs/adr/`.
+
 ## Private data, local-first policy and tests
 
 Organisation policy: nothing sensitive (client/project names, vault content)

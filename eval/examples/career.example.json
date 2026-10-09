@@ -1,0 +1,29 @@
+{
+  "_comment": "Copy to local/eval/career.json (git-ignored) and fill with YOUR questions. The 7 questions from the brief §12 are first; add ~13 more. expect_projects: project names/keys that must appear in citations or tools; expect_path_contains: file fragments at least one citation must match; expect_fact_contains: words that must appear together in one cited fact/source text; expect_tools_any: at least one of these tools must have been used (investigate questions only).",
+  "base_url": "http://localhost:8808",
+  "questions": [
+    {"id": "lead-ai-opp-to-delivery", "category": "leadership", "mode": "investigate",
+     "query": "What are my strongest examples of leading AI projects from opportunity through delivery?",
+     "expect_projects": ["REPLACE project A", "REPLACE project B"], "expect_path_contains": ["REPLACE file fragment"],
+     "expect_fact_contains": [["go-live"]], "expect_tools_any": ["find_career_evidence", "get_achievement", "get_role_history"],
+     "min_citations": 2},
+    {"id": "pm-capability", "category": "product", "mode": "investigate",
+     "query": "Which projects demonstrate my product management capability?",
+     "expect_projects": ["REPLACE"], "expect_tools_any": ["find_career_evidence", "get_role_history"], "min_citations": 2},
+    {"id": "enterprise-ai-transformation", "category": "leadership", "mode": "investigate",
+     "query": "What evidence do I have that I can lead enterprise AI transformation?",
+     "expect_projects": ["REPLACE"], "expect_tools_any": ["find_career_evidence", "get_achievement"], "min_citations": 3},
+    {"id": "customer-outcome", "category": "outcome", "mode": "auto",
+     "query": "What did we actually achieve for REPLACE customer?",
+     "expect_projects": ["REPLACE"], "expect_fact_contains": [["REPLACE metric or outcome word"]], "min_citations": 1},
+    {"id": "product-decisions", "category": "decisions", "mode": "investigate",
+     "query": "What were the major decisions made around REPLACE product?",
+     "expect_projects": ["REPLACE"], "expect_tools_any": ["trace_decision", "get_project_facts"], "min_citations": 2},
+    {"id": "sa-experience", "category": "architecture", "mode": "investigate",
+     "query": "Which projects best demonstrate my AI Solution Architect experience?",
+     "expect_projects": ["REPLACE"], "expect_tools_any": ["find_career_evidence", "get_role_history"], "min_citations": 2},
+    {"id": "star-examples", "category": "interview", "mode": "investigate",
+     "query": "Build me STAR interview examples from my actual career evidence.",
+     "expect_tools_any": ["get_achievement", "find_career_evidence"], "min_citations": 3}
+  ]
+}

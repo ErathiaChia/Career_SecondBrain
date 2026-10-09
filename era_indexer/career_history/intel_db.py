@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import text
@@ -816,3 +816,83 @@ def previous_finished_run(before_run_id: str | None = None) -> dict[str, Any] | 
 
 def now() -> datetime:
     return datetime.now()
+
+
+# --- Weekly report inputs (brief §16) ------------------------------------------------
+
+def weekly_inputs(run_id: str | None = None, since_days_fallback: int = 7) -> dict[str, Any]:
+    """Everything the weekly report needs, scoped to the window since the previous
+    completed run (fallback: last N days). Run-scoped tables (facts, achievements)
+    use run_id when available, so 'new this week' is exact."""
+    from career_history.db import _column_exists
+    run = None
+    if run_id and table_exists("pipeline_runs"):
+        with conn() as c:
+            rows = _rows(c.execute(text("SELECT * FROM pipeline_runs WHERE run_id = :r"), {"r": run_id}))
+        run = rows[0] if rows else None
+    prev = previous_finished_run(run_id)
+    since = prev["started_at"] if prev else datetime.now() - timedelta(days=since_days_fallback)
+    out: dict[str, Any] = {"run": run, "window": {"since": since, "previous_run": (prev or {}).get("run_id")}}
+    with conn() as c:
+        has_run_col = _column_exists(c, "knowledge_facts", "run_id")
+        out["event_counts"] = {r["kind"]: int(r["n"]) for r in _rows(c.execute(text("""
+            SELECT kind, COUNT(*) AS n FROM vault_events WHERE detected_at >= :since GROUP BY kind"""), {"since": since}))}
+        out["deleted"] = _rows(c.execute(text("""
+            SELECT file_path, payload ->> 'file_name' AS file_name FROM vault_events
+             WHERE kind = 'deleted' AND detected_at >= :since ORDER BY detected_at DESC LIMIT 20"""), {"since": since}))
+        fact_window = ("kf.run_id = :run" if (run_id and has_run_col) else "kf.created_at >= :since")
+        params = {"run": run_id, "since": since}
+        out["new_decisions"] = _rows(c.execute(text(f"""
+            SELECT kf.id, kf.statement, kf.occurred_at, kf.created_at, fr.file_name, p.name AS project
+              FROM knowledge_facts kf
+              JOIN file_registry fr ON fr.id = kf.file_id
+              LEFT JOIN project_files pf ON pf.file_id = kf.file_id
+              LEFT JOIN projects p ON p.id = pf.project_id
+             WHERE kf.kind = 'decision' AND {fact_window}
+             ORDER BY kf.created_at DESC LIMIT 40"""), params))
+        out["project_info"] = _rows(c.execute(text(f"""
+            SELECT p.name AS project,
+                   (SELECT COUNT(DISTINCT ve.file_id) FROM vault_events ve JOIN project_files pf2 ON pf2.file_id = ve.file_id
+                     WHERE pf2.project_id = p.id AND ve.kind IN ('added','version_added') AND ve.detected_at >= :since) AS new_docs,
+                   COUNT(kf.id) AS new_facts,
+                   COUNT(kf.id) FILTER (WHERE kf.kind = 'decision') AS new_decisions
+              FROM projects p
+              JOIN project_files pf ON pf.project_id = p.id
+              JOIN knowledge_facts kf ON kf.file_id = pf.file_id AND ({fact_window})
+             WHERE p.status IS DISTINCT FROM 'REMOVED'
+             GROUP BY p.id ORDER BY new_facts DESC LIMIT 20"""), params))
+        if table_exists("achievements"):
+            ach_window = "a.run_id = :run" if run_id else "a.created_at >= :since"
+            out["new_achievements"] = _rows(c.execute(text(f"""
+                SELECT a.id, a.statement, a.metric, a.is_me, p.name AS project
+                  FROM achievements a LEFT JOIN projects p ON p.id = a.project_id
+                 WHERE a.status <> 'rejected' AND ({ach_window})
+                 ORDER BY a.confidence DESC LIMIT 30"""), params))
+        else:
+            out["new_achievements"] = []
+        out["changed_information"] = _rows(c.execute(text("""
+            SELECT pc.summary, pc.impact, pc.change_type, p.name AS project
+              FROM project_changes pc JOIN projects p ON p.id = pc.project_id
+             WHERE pc.change_type = 'fact_changed' AND pc.detected_at >= :since
+             ORDER BY pc.detected_at DESC LIMIT 30"""), {"since": since})) if table_exists("project_changes") else []
+        has_conf_run = _column_exists(c, "fact_conflicts", "run_id")
+        out["conflicts"] = _rows(c.execute(text(f"""
+            SELECT c.id, c.conflict_type, c.likely_latest_fact_id, p.name AS project,
+                   a.statement AS statement_a, b.statement AS statement_b
+              FROM fact_conflicts c
+              LEFT JOIN projects p ON p.id = c.project_id
+              JOIN knowledge_facts a ON a.id = c.fact_a_id JOIN knowledge_facts b ON b.id = c.fact_b_id
+             WHERE c.status = 'needs_confirmation' AND (c.detected_at >= :since{" OR c.run_id = :run" if (has_conf_run and run_id) else ""})
+             ORDER BY c.detected_at DESC LIMIT 30"""), params)) if table_exists("fact_conflicts") else []
+        out["open_conflicts_total"] = int(c.execute(text(
+            "SELECT COUNT(*) FROM fact_conflicts WHERE status = 'needs_confirmation'")).scalar() or 0) if table_exists("fact_conflicts") else 0
+        out["stale"] = _rows(c.execute(text("""
+            SELECT sf.reason, sf.newer_evidence_id, kf.statement, p.name AS project
+              FROM stale_flags sf
+              JOIN knowledge_facts kf ON kf.id = sf.object_id AND sf.object_type = 'fact'
+              LEFT JOIN project_files pf ON pf.file_id = kf.file_id
+              LEFT JOIN projects p ON p.id = pf.project_id
+             WHERE sf.flagged_at >= :since
+             ORDER BY sf.flagged_at DESC LIMIT 30"""), {"since": since})) if table_exists("stale_flags") else []
+    return out
+

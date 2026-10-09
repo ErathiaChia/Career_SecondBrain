@@ -12,7 +12,7 @@
       "id": "ibf-entities",
       "type": "entities",
       "project": "CL89",
-      "expect": ["Institute of Banking", "REPLACE: a person on the project", "REPLACE: a key technology"]
+      "expect": ["Acme Banking Institute", "REPLACE: a person on the project", "REPLACE: a key technology"]
     },
     {
       "id": "ibf-decisions",
