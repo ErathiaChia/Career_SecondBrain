@@ -12,6 +12,43 @@ OpenAPI tool client) can discover and call them as tools.
 See the [repo masterplan](../README.md) for how all four Era Vault components
 fit together.
 
+## Surface (what clients see)
+
+Three tools, served two ways from the same code:
+
+| Tool | HTTP (Open WebUI via `/openapi.json`) | MCP (`/mcp`, Claude Code / Codex) |
+|---|---|---|
+| `ask_vault` | `POST /ask` | `ask_vault(query, mode, project, folder)` |
+| `search_vault` | `POST /search` | `search_vault(query, top_k, folder, kind)` |
+| `pipeline_status` | `GET /pipeline/status` | `pipeline_status()` |
+
+Everything else (`/projects/*`, `/facts/*`, `/entities/*`, `/graph/*`,
+`/structure/*`, `/digest/*`, `/internal/tools`) is **internal**: the bounded
+agent calls those functions through its tool registry (`era_mcp/agent_tools/`,
+27 tools), and the routes stay mounted but hidden for curl debugging
+(`INTERNAL_ROUTES_ENABLED=0` removes them). A bearer token (`API_BEARER_TOKEN`)
+gates every endpoint including `/mcp`; see `docs/clients/`.
+
+### How `/ask` works (brief §2, §3, §18)
+
+```
+question -> router (no LLM): structural census | weekly digest | retrieval
+         -> first pass: document cards + hybrid retrieval + rerank -> context builder
+         -> gate (no LLM): fast  -> ONE synthesis call
+                           investigate -> Judge loop: <= 3 rounds x <= 3 tool calls,
+                                          <= 10 documents, <= 20k context tokens,
+                                          stop on answer / no new evidence / budget
+         -> synthesis (budgeted) -> answer + citations + trajectory
+```
+
+`mode` (`auto|fast|investigate`) overrides the gate. The response carries
+`route`, `confidence{retrieval,cards,judge,final}`, `budget{iterations_used,
+tool_calls_used, documents_used, context_tokens, elapsed_s, stop_reason}`,
+`llm_calls`, `tools_used`, `trajectory`, `citations` (file / section / page /
+date / version for every `[n]` and `[F<id>]` label), `sufficient` and `gaps`.
+An unreachable Mac LLM is a **503** (no cloud fallback).
+
+
 ## Ecosystem
 
 | Component | Role |

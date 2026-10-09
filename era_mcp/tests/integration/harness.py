@@ -101,31 +101,37 @@ class _StubHandler(BaseHTTPRequestHandler):
                 q = m.group(1).strip()
             return json.dumps({"search_query": q or user, "sub_queries": [],
                                "complexity": "moderate", "hyde_doc": None})
-        if "agentic retrieval loop" in s:  # ReAct Judge verdict
+        if "career intelligence judge" in s:  # bounded-investigation Judge verdict
             ul = user.lower()
+            rounds = user.count('"action": "tools"')
             if "exhaust" in ul:
-                # Never satisfied: cycle a unique query each turn so every
-                # iteration adds a NEW doc (avoids the no-new-docs early exit) and
-                # the run hits the max-iters cap.
-                prior = user.count('"action": "research"')
-                token = ["zeta alpha", "zeta bravo", "zeta charlie", "zeta delta"][min(prior, 3)]
-                return json.dumps({"thought": "keep searching", "action": "research",
-                                   "sufficient": False, "missing": "more evidence",
-                                   "reformulations": [token], "query": "", "confidence": 0.2})
+                # Never satisfied: a NEW unique query every round so each tool call
+                # adds a new document (avoids the no-new-evidence exit) and the run
+                # hits the max-iterations cap.
+                token = ["zeta alpha", "zeta bravo", "zeta charlie", "zeta delta"][min(rounds, 3)]
+                return json.dumps({"thought": "keep digging", "action": "tools", "sufficient": False,
+                                   "missing": "more evidence", "confidence": 0.2,
+                                   "tool_calls": [{"tool": "search_documents", "args": {"query": token, "top_k": 3},
+                                                   "why": "widen"}]})
             if "escalate" in ul:
-                # Re-search once, then (seeing its own trajectory) answer — proves
-                # memory persists across iterations.
-                if "TRAJECTORY SO FAR" in user:
-                    return json.dumps({"thought": "now sufficient given prior step",
-                                       "action": "answer", "sufficient": True, "missing": "",
-                                       "reformulations": [], "query": "", "confidence": 0.9})
-                return json.dumps({"thought": "need more context first", "action": "research",
-                                   "sufficient": False, "missing": "menu context",
-                                   "reformulations": ["cafeteria pasta menu Fridays"],
-                                   "query": "", "confidence": 0.3})
-            return json.dumps({"thought": "candidates suffice", "action": "answer",
-                               "sufficient": True, "missing": "", "reformulations": [],
-                               "query": "", "confidence": 0.9})
+                # One targeted search, then (seeing its own trajectory) answer —
+                # proves memory persists across iterations.
+                if rounds >= 1:
+                    return json.dumps({"thought": "now sufficient given prior step", "action": "answer",
+                                       "sufficient": True, "missing": "", "confidence": 0.9, "tool_calls": []})
+                return json.dumps({"thought": "need the proposal passage", "action": "tools", "sufficient": False,
+                                   "missing": "proposal context", "confidence": 0.3,
+                                   "tool_calls": [{"tool": "search_documents",
+                                                   "args": {"query": "voice authentication proposal Accrete", "top_k": 3},
+                                                   "why": "targeted"}]})
+            if "compare" in ul:
+                return json.dumps({"thought": "diff the versions", "action": "tools", "sufficient": False,
+                                   "missing": "diff", "confidence": 0.4,
+                                   "tool_calls": [{"tool": "find_latest_version", "args": {"file_name": "Accrete Voice Auth Proposal"}},
+                                                  {"tool": "compare_documents", "args": {"file_id_a": 1}}]}) if rounds == 0 \
+                    else json.dumps({"thought": "done", "action": "answer", "sufficient": True, "confidence": 0.9, "tool_calls": []})
+            return json.dumps({"thought": "context suffices", "action": "answer", "sufficient": True,
+                               "missing": "", "confidence": 0.9, "tool_calls": []})
         # Synthesis: cite the first source.
         return "Based on the sources, we proposed a voice authentication system for Accrete [1]."
 
@@ -374,18 +380,43 @@ def main():
     os.environ["STRONG_RERANK_THRESHOLD"] = "0.99"
     es = client.post("/ask", json={"query": "escalate: what did we propose to Accrete?", "top_k": 5}).json()
     traj = es.get("trajectory", [])
-    check("escalated into the loop (>=2 steps)", len(traj) >= 2, detail=str(len(traj)))
-    check("first step re-searched (action=research)", bool(traj) and traj[0].get("action") == "research")
-    check("a later step answered after seeing the trajectory", any(t.get("action") == "answer" for t in traj))
-    check("queries_tried grew beyond the first pass", len(es.get("queries_tried", [])) > 1)
+    check("escalated into the loop (>=3 steps incl. first pass)", len(traj) >= 3, detail=str(len(traj)))
+    check("round 1 called a tool (action=tools)", len(traj) > 1 and traj[1].get("action") == "tools",
+          detail=str(traj[1:2]))
+    check("a later round answered after seeing the trajectory", any(t.get("action") == "answer" for t in traj))
+    check("tools_used records the call", "search_documents" in es.get("tools_used", []), detail=str(es.get("tools_used")))
+    check("route == investigate", es.get("route") == "investigate", detail=str(es.get("route")))
 
     print("\nT11 — max-iters cap → best-effort partial answer with notice")
     os.environ["STRONG_RERANK_THRESHOLD"] = "0.99"
     os.environ["AGENT_MAX_ITERS"] = "3"
     ex = client.post("/ask", json={"query": "exhaust the budget on this hard question", "top_k": 5}).json()
     check("max_iters_reached flagged", ex.get("max_iters_reached") is True, detail=str(ex.get("max_iters_reached")))
+    check("iterations capped at 3", ex.get("iterations") == 3, detail=str(ex.get("iterations")))
+    check("tool_calls <= 9", ex.get("tool_calls", 99) <= 9, detail=str(ex.get("tool_calls")))
     check("not marked sufficient", ex.get("sufficient") is False)
     check("gaps populated for the partial answer", bool(ex.get("gaps")))
+    check("budget.stop_reason == max_iterations", (ex.get("budget") or {}).get("stop_reason") == "max_iterations",
+          detail=str((ex.get("budget") or {}).get("stop_reason")))
+
+    print("\nT13 — mode override + public surface + MCP tools/list")
+    fm = client.post("/ask", json={"query": q, "mode": "fast", "top_k": 5}).json()
+    check("mode=fast skips the judge", fm.get("iterations") == 0 and fm.get("route") == "fast")
+    im = client.post("/ask", json={"query": q, "mode": "investigate", "top_k": 5}).json()
+    check("mode=investigate runs the judge", im.get("route") == "investigate" and im.get("iterations", 0) >= 1,
+          detail=str(im.get("iterations")))
+    spec = client.get("/openapi.json").json()
+    check("/openapi.json exposes exactly ask/search/pipeline-status", set(spec.get("paths", {})) == {"/ask", "/search", "/pipeline/status"},
+          detail=str(sorted(spec.get("paths", {}))))
+    ps = client.get("/pipeline/status").json()
+    check("/pipeline/status answers (no runs yet -> note)", "backlog_documents" in ps, detail=str(ps)[:200])
+    tl = client.post("/mcp", headers={"Accept": "application/json, text/event-stream", "Content-Type": "application/json"},
+                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    names = {t.get("name") for t in ((tl.json() if tl.headers.get("content-type", "").startswith("application/json") else {}).get("result") or {}).get("tools", [])}
+    check("MCP tools/list == 3 tools", names == {"ask_vault", "search_vault", "pipeline_status"}, detail=f"{tl.status_code} {names or tl.text[:120]}")
+    cm = client.post("/ask", json={"query": "compare the proposal versions", "mode": "investigate", "top_k": 5}).json()
+    check("compare scenario used version/diff tools",
+          {"find_latest_version", "compare_documents"} & set(cm.get("tools_used", [])) != set(), detail=str(cm.get("tools_used")))
     os.environ["STRONG_RERANK_THRESHOLD"] = "0.8"
 
     print("\nT12 — Layer 1 facts (decisions/commitments/events)")

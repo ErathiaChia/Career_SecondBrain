@@ -1,0 +1,11 @@
+# Codex CLI — ~/.codex/config.toml
+# Native streamable-HTTP MCP (check your Codex version supports `url`):
+[mcp_servers.career_intel]
+url = "http://nas.your-tailnet.ts.net:8808/mcp"
+bearer_token_env_var = "ERA_MCP_TOKEN"
+
+# Fallback for Codex builds without HTTP MCP: bridge over stdio with mcp-remote.
+# [mcp_servers.career_intel]
+# command = "npx"
+# args = ["-y", "mcp-remote", "http://nas.your-tailnet.ts.net:8808/mcp",
+#         "--header", "Authorization: Bearer ${ERA_MCP_TOKEN}"]

@@ -56,6 +56,12 @@ services:
       LLM_FALLBACK_ENABLED: "0"
       # Bearer token required on every endpoint when set (from ../.env).
       API_BEARER_TOKEN: ${API_BEARER_TOKEN:-}
+      # MCP surface for Claude Code / Codex at http://<nas>:8808/mcp (same 3 tools).
+      MCP_ENABLED: "1"
+      MCP_PATH: /mcp
+      # Hidden debug routes (/projects/*, /facts/*, ...); the agent uses them via its registry.
+      INTERNAL_ROUTES_ENABLED: "1"
+      TOOL_TIMEOUT_S: "20"
 
       # Reranker — Ollama has no rerank endpoint. Default is Infinity on the Mac
       # (era_mcp/tools/run_reranker.sh, kept alive by launchd). Fallback

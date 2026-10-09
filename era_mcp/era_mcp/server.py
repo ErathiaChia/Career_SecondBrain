@@ -1,460 +1,120 @@
-"""Era Vault tool server — OpenAPI-compatible for Open WebUI.
+"""Era Vault / Career Intelligence read server.
 
-Exposes semantic search over your knowledge base as REST endpoints
-with auto-generated OpenAPI spec that Open WebUI discovers at /openapi.json.
+Public surface (what every client sees, as OpenAPI tools for Open WebUI and
+as MCP tools at /mcp for Claude Code / Codex):
 
-Run directly:
-    python -m era_mcp.server
+    POST /ask              ask_vault        bounded agent (fast | investigate)
+    POST /search           search_vault     raw hybrid passage search
+    GET  /pipeline/status  pipeline_status  how current the knowledge is
+
+Everything else (project tools, facts, entities, graph, structure, digests) is
+internal: reachable by the agent through its tool registry and, for debugging,
+as hidden HTTP routes (INTERNAL_ROUTES_ENABLED). Nothing here writes to the
+vault database except proposed_actions (via the hidden project routes).
 """
 from __future__ import annotations
 
-import asyncio
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
-from era_mcp import agent, config, epistemic, llm, query_understanding, rerank, retrieval, structural
+from era_mcp import agent, auth, config, retrieval
 from era_mcp.pipeline_routes import router as pipeline_router
-from era_mcp.project_routes import router as project_router
+from era_mcp.schemas import AskRequest, SearchRequest
+
+log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    auth.warn_if_open()
+    if config.mcp_enabled():
+        from era_mcp import mcp_server
+        async with mcp_server.mcp.session_manager.run():
+            yield
+    else:
+        yield
+
 
 app = FastAPI(
     title="Era Vault",
-    description="Semantic search and project intelligence over your personal knowledge base.",
-    version="0.2.0",
+    description="Career Second Brain: cited answers, raw search and pipeline status over your personal knowledge base.",
+    version="0.3.0",
+    lifespan=_lifespan,
 )
-app.include_router(project_router)
-app.include_router(pipeline_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.middleware("http")(auth.bearer_middleware)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-# Resolved once at import so the value appears as a concrete default in the
-# generated OpenAPI schema (Open WebUI reads that default; default_factory would
-# leave it absent and the model would invent its own, usually 5).
-_DEFAULT_TOP_K = config.default_top_k()
-
-
-class SearchRequest(BaseModel):
-    query: str = Field(description="Natural-language search query.")
-    top_k: int = Field(
-        default=_DEFAULT_TOP_K,
-        description="Number of results to return.",
-    )
-    folder: Optional[str] = Field(default=None, description="Folder name to restrict search to.")
-    kind: Optional[str] = Field(default=None, description='Filter by "document" or "audio".')
-    context_window: int = Field(
-        default=3,
-        description="Number of surrounding chunks (before and after) to include for broader context. 0 = matched chunk only.",
-    )
-
-
-class KnowledgeSearchRequest(SearchRequest):
-    """Knowledge-first search request."""
-
+# --- public ----------------------------------------------------------------------
 
 @app.post("/search", operation_id="search_vault")
 async def search_vault(req: SearchRequest) -> dict:
-    """Search the Era Vault knowledge base using semantic similarity.
-
-    Embeds the query and finds the most relevant chunks from your
-    indexed documents and audio transcripts. Surrounding chunks are
-    automatically included for broader context.
-    """
+    """Raw hybrid passage search (vector + full-text + filename) over your indexed
+    documents and transcripts, with surrounding context. No LLM answer — use
+    ask_vault for answers."""
     embedding = await retrieval.embed_query(req.query)
-    results = retrieval.search(
-        query=req.query,
-        query_embedding=embedding,
-        top_k=req.top_k,
-        folder=req.folder,
-        kind=req.kind,
-        context_window=req.context_window,
-    )
+    results = retrieval.search(query=req.query, query_embedding=embedding, top_k=req.top_k, folder=req.folder,
+                               kind=req.kind, context_window=req.context_window)
     return {"results": results}
-
-
-@app.post("/knowledge/search", operation_id="search_vault_v3")
-async def search_vault_v3(req: KnowledgeSearchRequest) -> dict:
-    """Search across summaries, entities, relationships, communities, and chunks."""
-    embedding = await retrieval.embed_query(req.query)
-    return retrieval.knowledge_search(
-        query=req.query,
-        query_embedding=embedding,
-        top_k=req.top_k,
-        folder=req.folder,
-    )
-
-
-class AskRequest(BaseModel):
-    query: str = Field(description="Natural-language question to answer.")
-    top_k: int = Field(default=_DEFAULT_TOP_K, description="Chunks to retrieve and cite (used when adaptive_k is false).")
-    adaptive_k: bool = Field(
-        default=True,
-        description="Size retrieval breadth to question complexity (simple/moderate/complex). Overrides top_k when on.",
-    )
-    folder: Optional[str] = Field(default=None, description="Restrict to a folder.")
-    use_graph: bool = Field(default=True, description="Augment with graph entities/relationships.")
-    rewrite: bool = Field(default=True, description="LLM query rewriting before retrieval.")
-    rerank: bool = Field(default=True, description="Cross-encoder rerank of candidates.")
-    synthesize: bool = Field(
-        default=True,
-        description="Return an LLM-synthesized answer. False = reranked chunks only.",
-    )
-
-
-_SYNTH_SYSTEM = (
-    "You are a precise assistant answering from a personal knowledge base. Use "
-    "ONLY the numbered sources to answer. Cite sources inline as [n] immediately "
-    "after the claim they support. If the sources do not contain the answer, say "
-    "so plainly rather than guessing. Be concise and concrete — prefer names, "
-    "dates, and specifics over generalities. Start each claim with FACT: (stated "
-    "in a source, cited), INFERENCE: (your reasoning from cited facts), or "
-    "UNKNOWN: (needed but not in the sources). When sources disagree, show both "
-    "with citations instead of picking one."
-)
-
-
-async def _synthesize(question: str, chunks: list[dict], graph: Optional[dict]) -> str:
-    # Group consecutive passages from the same document under one header so the
-    # model reads coherent documents (doc-first assembly emits them grouped).
-    # The [n] numbering stays 1:1 with the citations list regardless of grouping.
-    blocks: list[str] = []
-    last_file: object = object()
-    for i, c in enumerate(chunks, start=1):
-        fname = c.get("file_name", "?")
-        if fname != last_file:
-            blocks.append(f"=== Document: {fname} (folder: {c.get('folder', '?')}) ===")
-            last_file = fname
-        content = (c.get("content") or "").strip()[:1500]
-        blocks.append(f"[{i}] {content}")
-    context = "\n".join(blocks)
-    graph_note = ""
-    if graph and graph.get("entities"):
-        ents = ", ".join(
-            e.get("canonical_name", "")
-            for e in graph["entities"][:10]
-            if e.get("canonical_name")
-        )
-        if ents:
-            graph_note = f"\n\nRelated entities in the knowledge graph: {ents}"
-    user = f"Question: {question}\n\nSources:\n{context}{graph_note}"
-    return await llm.chat(
-        [{"role": "system", "content": _SYNTH_SYSTEM},
-         {"role": "user", "content": user}]
-    )
 
 
 @app.post("/ask", operation_id="ask_vault")
 async def ask_vault(req: AskRequest) -> dict:
-    """Answer a question over the vault, end to end.
+    """Answer a question from the knowledge base with cited evidence.
 
-    Pipeline: query rewrite -> hybrid retrieve -> rerank -> optional graph
-    augmentation -> synthesized answer with [n] citations. Always returns the
-    supporting chunks; if the Mac LLM (and OpenAI fallback) are unavailable it
-    degrades to returning reranked chunks with ``answer=null`` and
-    ``degraded=true`` instead of failing.
-    """
-    if config.agentic_ask_enabled():
-        return await agent.run_agentic_ask(req)
+    The agent routes mechanically first (project census -> structural listing;
+    "what changed this week" -> weekly report), runs a card-first hybrid
+    retrieval, then either answers in ONE pass (fast) or runs a bounded
+    investigation (<= 3 Judge rounds x <= 3 tool calls, <= 10 documents, <= 20k
+    context tokens) over project facts, document cards, version diffs,
+    conflicts, decisions, achievements and career evidence.
 
-    # Legacy single-pass path (kill-switch: AGENTIC_ASK_ENABLED=0).
-    from fastapi.concurrency import run_in_threadpool
-
-    degraded = False
-    degraded_reason: Optional[str] = None
-
-    # 1) Query understanding (degrade-safe: identity rewrite on any failure).
-    understanding = (
-        await query_understanding.rewrite_query(req.query)
-        if req.rewrite else query_understanding.identity(req.query)
-    )
-    search_query = understanding["search_query"]
-    sub_queries = (
-        understanding.get("sub_queries", []) if config.multi_query_enabled() else []
-    )
-    complexity = understanding.get("complexity", "moderate")
-
-    # Adaptive breadth: size how many chunks to retrieve+cite to the question
-    # (lookup -> few, "everything about X" -> more), bounded for a ~9B model.
-    if req.adaptive_k and config.adaptive_topk_enabled():
-        effective_top_k = config.topk_for_complexity(complexity)
-    else:
-        effective_top_k = req.top_k
-
-    # 2) Embed the main query (+ each sub-query) and run multi-query hybrid
-    #    retrieve + a single rerank against the user's ORIGINAL question. The main
-    #    query uses the HyDE passage as embed text when present; sub-queries embed
-    #    themselves. De-dup identical strings so nothing is embedded twice.
-    plan = retrieval.plan_queries(understanding, sub_queries)
-    embeddings = await asyncio.gather(
-        *[retrieval.embed_query(embed_text) for _, embed_text in plan]
-    )
-    queries = [(q_text, emb) for (q_text, _), emb in zip(plan, embeddings)]
-    chunks = await retrieval.multi_search_async(
-        queries=queries,
-        rerank_query=req.query,
-        top_k=effective_top_k,
-        folder=req.folder,
-        rerank_enabled=req.rerank,
-    )
-
-    # 3) Optional graph augmentation (best-effort; empty if not yet populated).
-    graph = None
-    if req.use_graph:
-        graph = await run_in_threadpool(
-            retrieval.graph_only, search_query, effective_top_k
-        )
-
-    # 4) Citations mirror the supporting chunks 1:1.
-    citations = [
-        {
-            "n": i,
-            "file_name": c.get("file_name"),
-            "file_path": c.get("file_path"),
-            "folder": c.get("folder"),
-            "matched_chunk_index": c.get("matched_chunk_index"),
-            "similarity": c.get("similarity"),
-            "rerank_score": c.get("rerank_score"),
-        }
-        for i, c in enumerate(chunks, start=1)
-    ]
-
-    # 5) Synthesis — fail loudly if the local LLM is unavailable (local-first:
-    # there is no cloud fallback). Callers that only want sources pass
-    # synthesize=false.
-    answer = None
-    if req.synthesize and chunks:
-        try:
-            answer = await _synthesize(req.query, chunks, graph)
-        except llm.LLMUnavailable as e:
-            raise HTTPException(status_code=503, detail=llm.unavailable_detail(e))
-    elif req.synthesize and not chunks:
-        degraded = True
-        degraded_reason = "no_results"
-
-    return {
-        "query": req.query,
-        "rewritten_query": search_query if search_query != req.query else None,
-        "sub_queries": sub_queries,
-        "complexity": complexity,
-        "effective_top_k": effective_top_k,
-        "answer": answer,
-        "epistemic": epistemic.parse(answer) if answer else None,
-        "citations": citations,
-        "chunks": chunks,
-        "graph": graph,
-        "degraded": degraded,
-        "degraded_reason": degraded_reason,
-        "provider": llm.provider_status(),
-        # Whether reranking actually fired on THIS response (chunks carry a
-        # rerank_score only when the reranker succeeded; it silently falls back
-        # to RRF order otherwise). rerank_backend reports the configuration.
-        "reranked": bool(req.rerank and chunks and any("rerank_score" in c for c in chunks)),
-        "rerank_error": rerank.last_error(),
-        "rerank_backend": rerank.status() if req.rerank else None,
-    }
+    The answer carries FACT / INFERENCE / UNKNOWN labels with [n] / [F<id>]
+    citations; `citations` resolve every label to a file (+ section/page/date/
+    version); `sufficient`, `gaps` and `budget.stop_reason` say how complete it
+    is; `trajectory` / `tools_used` show what was checked. 503 when the local
+    LLM is unreachable (there is no cloud fallback)."""
+    return await agent.run_ask(req)
 
 
-@app.get("/entities/search", operation_id="search_entities")
-async def search_entities(
-    query: str = Query(description="Entity name, alias, or fragment."),
-    limit: int = Query(default=10, ge=1, le=100),
-) -> dict:
-    """Search canonical graph entities."""
-    return {"results": retrieval.search_entities(query=query, limit=limit)}
+@app.get("/health", include_in_schema=False)
+async def health() -> dict:
+    return {"ok": True, "version": app.version}
 
 
-@app.get("/relationships/search", operation_id="search_relationships")
-async def search_relationships(
-    query: str = Query(description="Entity, relationship type, or evidence text."),
-    limit: int = Query(default=10, ge=1, le=100),
-) -> dict:
-    """Search typed relationships and evidence."""
-    return {"results": retrieval.search_relationships(query=query, limit=limit)}
+app.include_router(pipeline_router)
 
+# --- internal / hidden ------------------------------------------------------------
 
-@app.get("/communities/search", operation_id="search_communities")
-async def search_communities(
-    query: str = Query(description="Community name, summary, or member entity."),
-    limit: int = Query(default=10, ge=1, le=100),
-) -> dict:
-    """Search graph communities."""
-    return {"results": retrieval.search_communities(query=query, limit=limit)}
+if config.internal_routes_enabled():
+    from era_mcp.internal_routes import router as internal_router
+    from era_mcp.project_routes import router as project_router
 
-
-@app.get("/facts/search", operation_id="search_facts")
-async def search_facts(
-    query: str = Query(description="Text in a fact statement or quote."),
-    kind: Optional[str] = Query(default=None, description=(
-        'Filter by kind: "decision", "commitment", "event", "requirement", "risk", '
-        '"action_item", "open_question", "dependency", or "milestone".')),
-    limit: int = Query(default=10, ge=1, le=100),
-) -> dict:
-    """Search structured facts extracted from the vault: decisions, commitments,
-    events, requirements, risks, action items, open questions, dependencies and
-    milestones. Use for "what did we decide / what are the risks / when is X due"."""
-    return {"results": retrieval.search_facts(query=query, kind=kind, limit=limit)}
-
-
-@app.get("/documents/summary", operation_id="get_document_summary")
-async def get_document_summary(
-    file_id: Optional[int] = Query(default=None),
-    file_name: Optional[str] = Query(default=None),
-) -> dict:
-    """Return the latest document summary."""
-    summary = retrieval.get_document_summary(file_id=file_id, file_name=file_name)
-    if summary is None:
-        raise HTTPException(status_code=404, detail="Document summary not found")
-    return summary
-
-
-@app.get("/sections/{section_id}/summary", operation_id="get_section_summary")
-async def get_section_summary(section_id: int) -> dict:
-    """Return the latest section summary."""
-    summary = retrieval.get_section_summary(section_id=section_id)
-    if summary is None:
-        raise HTTPException(status_code=404, detail="Section summary not found")
-    return summary
-
-
-@app.get("/entities/{entity_id}/neighbors", operation_id="get_entity_neighbors")
-async def get_entity_neighbors(
-    entity_id: int,
-    limit: int = Query(default=25, ge=1, le=100),
-) -> dict:
-    """Return graph neighbors for one entity."""
-    result = retrieval.get_entity_neighbors(entity_id=entity_id, limit=limit)
-    if result["entity"] is None:
-        raise HTTPException(status_code=404, detail="Entity not found")
-    return result
-
-
-@app.get("/entities/{entity_id}/facts", operation_id="get_entity_facts")
-async def get_entity_facts(
-    entity_id: int,
-    limit: int = Query(default=25, ge=1, le=100),
-) -> dict:
-    """Decisions/commitments/events where this entity is the subject, object, or project."""
-    return {"results": retrieval.facts_for_entity(entity_id=entity_id, limit=limit)}
-
-
-@app.get("/graph/subgraph", operation_id="get_graph_subgraph")
-async def get_graph_subgraph(
-    entity_id: Optional[int] = Query(default=None),
-    scope: str = Query(default="all"),
-    limit: int = Query(default=100, ge=1, le=500),
-) -> dict:
-    """Return graph export data, optionally scoped to one entity neighborhood."""
-    return retrieval.get_graph_subgraph(
-        entity_id=entity_id,
-        scope=scope,
-        limit=limit,
-    )
-
-
-@app.get("/status", operation_id="indexing_status")
-async def indexing_status(
-    folder: Optional[str] = Query(default=None, description="Folder to scope status check."),
-) -> dict:
-    """Check the current indexing status of the Era Vault pipeline.
-
-    Returns a count of files in each processing stage.
-    """
-    summary = retrieval.status_summary(folder=folder)
-    return {
-        "folder": folder,
-        "summary": summary,
-        "provider": llm.provider_status(),
-        "rerank": rerank.status(),
-        # False means the container is running on the inline fallback prompts
-        # (prompts/ not copied into the image) — see Dockerfile.
-        "prompts_loaded_from_files": agent.prompts_loaded_from_files(),
-    }
-
-
-@app.get("/folders", operation_id="list_folders")
-async def list_folders() -> dict:
-    """List all top-level folders in the Era Vault knowledge base."""
-    folders = retrieval.list_folders()
-    return {"folders": folders}
-
-
-@app.get("/structure/folders", operation_id="list_folders_tree")
-async def list_folders_tree(
-    prefix: Optional[str] = Query(
-        default=None,
-        description="Absolute path prefix to list child folders under. Omit to match from `question`.",
-    ),
-    question: Optional[str] = Query(
-        default=None,
-        description="Natural-language scope, e.g. 'projects under Corp-A 2026'.",
-    ),
-) -> dict:
-    """List the project/child folders under a path (or matched from a question),
-    each with a file count. This is a COMPLETE census from the live file index —
-    use it for "how many / list all folders or projects", NOT semantic search."""
-    from fastapi.concurrency import run_in_threadpool
-
-    return await run_in_threadpool(structural.project_inventory, question, prefix)
-
-
-@app.get("/structure/overview", operation_id="folder_overview")
-async def folder_overview() -> dict:
-    """Compact live overview of the whole vault folder layout (top-level folders +
-    their immediate subfolders, with file counts). Reflects the current index."""
-    from fastapi.concurrency import run_in_threadpool
-
-    overview = await run_in_threadpool(structural.folder_overview)
-    return {"overview": overview}
-
-
-@app.get("/graph/snapshot", operation_id="graph_snapshot")
-async def graph_snapshot(
-    scope: str = Query(default="all", description='Snapshot scope, e.g. "all" or "folder:Research".'),
-) -> dict:
-    """Return the latest Sigma.js-compatible graph snapshot."""
-    snapshot = retrieval.graph_snapshot(scope=scope)
-    if snapshot is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No current graph snapshot for scope: {scope}",
-        )
-    return snapshot
-
-
-@app.get("/graph/status", operation_id="graph_status")
-async def graph_status(
-    scope: str = Query(default="all", description='Snapshot scope, e.g. "all" or "folder:Research".'),
-) -> dict:
-    """Return graph extraction and snapshot status."""
-    return retrieval.graph_status(scope=scope)
+    app.include_router(internal_router, include_in_schema=False)
+    app.include_router(project_router, include_in_schema=False)
 
 
 def _mount_graph_viewer() -> None:
-    candidates = [
-        Path(__file__).resolve().parents[2] / "era_graph_web" / "dist",
-        Path("/app/era_graph_web/dist"),
-    ]
+    candidates = [Path(__file__).resolve().parents[2] / "era_graph_web" / "dist", Path("/app/era_graph_web/dist")]
     for dist in candidates:
         if dist.exists():
-            app.mount(
-                "/graph",
-                StaticFiles(directory=dist, html=True),
-                name="graph-viewer",
-            )
+            app.mount("/graph", StaticFiles(directory=dist, html=True), name="graph-viewer")
             return
 
 
 _mount_graph_viewer()
+
+# MCP (streamable HTTP) — mounted last so FastAPI routes win; served at MCP_PATH.
+if config.mcp_enabled():
+    from era_mcp import mcp_server
+
+    app.mount("/", mcp_server.http_app(), name="mcp")
 
 
 def main():

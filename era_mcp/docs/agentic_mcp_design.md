@@ -1,6 +1,6 @@
 # Intelligent MCP — Agentic Retrieval Design
 
-> **Status:** design only (not yet built). Scope: **`era_mcp` only.** The
+> **Status:** shipped — superseded by the bounded tool-calling agent in era_mcp/agent.py (Phase 3, Oct 2026); kept for history. Scope: **`era_mcp` only.** The
 > Auditor/Librarian (vault cleanup) is **not touched** by this work. The one
 > thing they share is a neutral **Vault Manifest** reference (see §5).
 

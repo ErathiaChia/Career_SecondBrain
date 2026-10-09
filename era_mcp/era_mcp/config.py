@@ -340,3 +340,69 @@ def strong_rerank_threshold() -> float:
     first pass answers directly; below it, escalate to the Judge loop. Calibrate
     against the scorecard once the cross-encoder reranker is live."""
     return float(os.environ.get("STRONG_RERANK_THRESHOLD", "0.8"))
+
+
+# --- Bounded agent (brief §2) + surface ------------------------------------------
+
+def agent_max_tool_calls_per_iteration() -> int:
+    return int(os.environ.get("AGENT_MAX_TOOL_CALLS_PER_ITERATION", "3"))
+
+
+def agent_max_documents() -> int:
+    return int(os.environ.get("AGENT_MAX_DOCUMENTS", "10"))
+
+
+def agent_max_context_tokens() -> int:
+    return int(os.environ.get("AGENT_MAX_CONTEXT_TOKENS", "20000"))
+
+
+def agent_synth_reserve_s() -> float:
+    """Wall-clock kept back for the final synthesis call."""
+    return float(os.environ.get("AGENT_SYNTH_RESERVE_S", "35"))
+
+
+def agent_est_judge_s() -> float:
+    return float(os.environ.get("AGENT_EST_JUDGE_S", "15"))
+
+
+def tool_timeout_s() -> float:
+    return float(os.environ.get("TOOL_TIMEOUT_S", "20"))
+
+
+def weak_rerank_threshold() -> float:
+    """Below this normalized top relevance the first pass is clearly weak."""
+    return float(os.environ.get("WEAK_RERANK_THRESHOLD", "0.35"))
+
+
+def card_strong_threshold() -> float:
+    """Card cosine at which a card hit that agrees with the top passages lets
+    the fast path answer without a Judge call."""
+    return float(os.environ.get("CARD_STRONG_THRESHOLD", "0.62"))
+
+
+def rrf_card_weight() -> float:
+    """Extra RRF weight for chunks of documents whose CARD matched the query."""
+    return float(os.environ.get("RRF_CARD_WEIGHT", "0.7"))
+
+
+def rewrite_min_terms() -> int:
+    """Skip the LLM query rewrite for short lookups (<= this many content terms)
+    when a project resolved mechanically."""
+    return int(os.environ.get("REWRITE_MIN_TERMS", "6"))
+
+
+def api_bearer_token() -> str:
+    return os.environ.get("API_BEARER_TOKEN", "").strip()
+
+
+def internal_routes_enabled() -> bool:
+    return _flag("INTERNAL_ROUTES_ENABLED", True)
+
+
+def mcp_enabled() -> bool:
+    return _flag("MCP_ENABLED", True)
+
+
+def mcp_path() -> str:
+    return os.environ.get("MCP_PATH", "/mcp").rstrip("/") or "/mcp"
+

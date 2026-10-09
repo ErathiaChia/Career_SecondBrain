@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "career-intel": {
+      "type": "http",
+      "url": "http://nas.your-tailnet.ts.net:8808/mcp",
+      "headers": { "Authorization": "Bearer ${ERA_MCP_TOKEN}" }
+    }
+  }
+}

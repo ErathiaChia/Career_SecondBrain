@@ -1,39 +1,40 @@
-"""Agentic /ask: router + bounded ReAct Judge loop.
+"""The Career Intelligence agent behind /ask (brief §2, §3, §18, §19).
 
-Turns /ask from a single pass into an intelligent agent:
+    question
+      -> router (mechanical): structural census | weekly digest | retrieval
+      -> first pass: cards + hybrid retrieval + rerank -> ContextBuilder
+      -> gate (mechanical): fast  -> one synthesis call
+                            investigate -> Judge loop:
+                                 <= 3 iterations x <= 3 tool calls from the registry
+                                 <= 10 documents, <= 20k context tokens, wall-clock budget
+                                 stop on answer / no new evidence / budget
+      -> synthesis (budgeted) -> structured JSON with citations + trajectory
 
-  question
-    -> route (rules + complexity)
-       - STRUCTURAL ("how many / list all folders/projects") -> live inventory
-       - SEMANTIC -> first retrieval pass -> confidence gate
-            >= threshold -> answer (single pass)
-            <  threshold -> bounded ReAct Judge loop (<= AGENT_MAX_ITERS):
-                 the Judge carries a trajectory (memory), drives re-search /
-                 re-write / re-route, and the controller enforces the limits.
-    -> synthesize (with the investigation trajectory) -> structured JSON
-
-The Judge runs on the Mac (`LLM_JUDGE_MODEL`, e.g. gemma4:31b-mlx). Everything
-degrades gracefully: any LLM failure falls back to returning reranked chunks.
-Scope: era_mcp only — never touches the auditor. See docs/agentic_mcp_design.md.
+No cloud fallback: an unreachable local LLM is a 503. The only LLM calls are
+the optional query rewrite, one Judge call per iteration, and one synthesis.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import re
-import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.concurrency import run_in_threadpool
 
-from era_mcp import config, epistemic, llm, query_understanding, rerank, retrieval, structural
+from era_mcp import cards as cards_mod
+from era_mcp import config, epistemic, judge, llm, projects, query_understanding, rerank, retrieval, router, structural
+from era_mcp.agent_tools import registry
+from era_mcp.agent_tools.career import _state_text
+from era_mcp.agent_tools.sources import from_card, from_chunk, from_fact, from_project
+from era_mcp.budget import Budget
+from era_mcp.context import ContextBuilder
 
 _PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
-
-
 _PROMPTS_FROM_FILES: dict[str, bool] = {}
+log = logging.getLogger(__name__)
 
 
 def _load_prompt(name: str, fallback: str) -> str:
@@ -46,62 +47,34 @@ def _load_prompt(name: str, fallback: str) -> str:
         return text
     except OSError:
         _PROMPTS_FROM_FILES[name] = False
-        logging.getLogger(__name__).warning(
-            "prompt file %s not found under %s; using inline fallback", name, _PROMPTS)
+        log.warning("prompt file %s not found under %s; using inline fallback", name, _PROMPTS)
         return fallback
 
 
 def prompts_loaded_from_files() -> bool:
-    return bool(_PROMPTS_FROM_FILES) and all(_PROMPTS_FROM_FILES.values())
+    status = {**_PROMPTS_FROM_FILES, **judge.prompts_loaded()}
+    return bool(status) and all(status.values())
 
 
 def assert_prompts_loaded() -> None:
     """Build-time check (Dockerfile) that the prompt files are in the image."""
-    missing = [n for n in ("judge_agent.md", "synthesis.md") if not (_PROMPTS / n).exists()]
+    missing = [n for n in ("judge_agent.md", "synthesis.md", "ai_secondbrain_agent.md") if not (_PROMPTS / n).exists()]
     if missing:
         raise RuntimeError(f"prompt files missing from image: {missing} (expected in {_PROMPTS})")
 
 
-_JUDGE_SYS = _load_prompt(
-    "judge_agent.md",
-    "You are a retrieval Judge. Given the question, folder overview, trajectory, "
-    "and candidate summaries, return ONLY JSON: {thought, action "
-    "(research|structural|answer), sufficient, missing, reformulations, query, "
-    "confidence}.",
-)
-_SYNTH_SYS = _load_prompt(
-    "synthesis.md",
-    "Answer ONLY from the numbered SOURCES, citing claims inline as [n]. Label "
-    "claims FACT: (stated, cited), INFERENCE: (reasoned from cited facts) or "
-    "UNKNOWN: (not in the sources). If incomplete or the search budget ran out, "
-    "say plainly it is a best-effort partial answer and name what is missing. "
-    "Never fabricate.",
-)
-
-# Cheap structural router: census / enumeration questions go to the inventory,
-# not semantic search. The Judge can also re-route to structural mid-loop.
-_STRUCTURAL_RE = re.compile(
-    r"\b(how many|list (all|the)|all (the )?(projects?|folders?)|"
-    r"what(?:'s| is) (in|under)|folder structure|which folders?|enumerate)\b",
-    re.IGNORECASE,
-)
+_SYNTH_SYS = _load_prompt("synthesis.md", (
+    "Answer ONLY from the SOURCES. Cite each claim as [n] or [F<id>]. Start claims with FACT: (cited), "
+    "INFERENCE: (reasoned from cited facts) or UNKNOWN: (not in the sources). If the INVESTIGATION says "
+    "the budget ran out or evidence is missing, say this is a best-effort partial answer and name the gaps. "
+    "Prefer the latest document version; show disagreements with both citations. Never fabricate."))
 
 
-def route(question: str, understanding: dict[str, Any]) -> str:
-    """'structural' for census/enumeration questions, else 'semantic'."""
-    if _STRUCTURAL_RE.search(question or ""):
-        return "structural"
-    return "semantic"
-
-
-def _score(r: dict[str, Any]) -> float:
-    rs = r.get("rerank_score")
-    return rs if rs is not None else (r.get("rrf_score") or 0.0)
-
+# --- helpers --------------------------------------------------------------------
 
 def _confidence(results: list[dict[str, Any]]) -> float:
-    """Normalized (0-1) top relevance, used by the gate. Reranker scales differ:
-    llm_score is 0-10, infinity ~0-1; normalize so the threshold is backend-agnostic."""
+    """Normalized (0-1) top relevance of the first pass. Reranker scales differ:
+    llm_score is 0-10, infinity ~0-1. Unscored chunks fall back to cosine."""
     if not results:
         return 0.0
     scores = [r["rerank_score"] for r in results if r.get("rerank_score") is not None]
@@ -111,177 +84,7 @@ def _confidence(results: list[dict[str, Any]]) -> float:
     top = max(scores)
     if config.rerank_kind() == "llm_score":
         top = top / 10.0
-    return max(0.0, min(1.0, top))
-
-
-def _key(r: dict[str, Any]) -> tuple:
-    return (r.get("file_path"), r.get("matched_chunk_index"), r.get("parent_chunk_id"))
-
-
-def _merge(pool: dict[tuple, dict[str, Any]], results: list[dict[str, Any]]) -> int:
-    """Merge results into the pool (best score wins). Returns count of NEW keys."""
-    added = 0
-    for r in results:
-        k = _key(r)
-        if k not in pool:
-            pool[k] = r
-            added += 1
-        elif _score(r) > _score(pool[k]):
-            pool[k] = r
-    return added
-
-
-def _ranked(pool: dict[tuple, dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    return sorted(pool.values(), key=_score, reverse=True)[:limit]
-
-
-def _summarize(results: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
-    """Compact candidate summaries for the Judge — never full chunks."""
-    out = []
-    for i, r in enumerate(results[:limit], start=1):
-        snippet = (r.get("content") or "").replace("\n", " ").strip()[:200]
-        out.append({
-            "n": i,
-            "file_name": r.get("file_name"),
-            "folder": r.get("folder"),
-            "rerank_score": r.get("rerank_score"),
-            "snippet": snippet,
-        })
-    return out
-
-
-async def _retrieve(query_texts: list[Any], req: Any, top_k: int) -> list[dict[str, Any]]:
-    """Embed each query (instruction applied in embed_query) and run multi-query
-    fused retrieval + a single rerank against the user's original question.
-    Items are query strings or ``(query_text, embed_text)`` pairs (HyDE)."""
-    seen: set[str] = set()
-    planned: list[tuple[str, str]] = []
-    for q in query_texts:
-        text, embed_text = (q, q) if isinstance(q, str) else q
-        if text and text not in seen:
-            seen.add(text)
-            planned.append((text, embed_text or text))
-    if not planned:
-        return []
-    embeddings = await asyncio.gather(*[retrieval.embed_query(e) for _, e in planned])
-    pairs = [(t, emb) for (t, _), emb in zip(planned, embeddings)]
-    return await retrieval.multi_search_async(
-        queries=pairs,
-        rerank_query=req.query,
-        top_k=top_k,
-        folder=req.folder,
-        rerank_enabled=req.rerank,
-    )
-
-
-def _normalize_verdict(data: Any) -> dict[str, Any]:
-    if not isinstance(data, dict):
-        data = {}
-    action = str(data.get("action", "")).strip().lower()
-    if action not in ("research", "structural", "answer"):
-        action = "answer"
-    refs = data.get("reformulations") or []
-    refs = ([str(x).strip() for x in refs if str(x).strip()][:3]
-            if isinstance(refs, list) else [])
-    conf = data.get("confidence", 0.0)
-    return {
-        "thought": str(data.get("thought", "")).strip(),
-        "action": action,
-        "sufficient": bool(data.get("sufficient", False)),
-        "missing": str(data.get("missing", "")).strip(),
-        "reformulations": refs,
-        "query": str(data.get("query", "")).strip(),
-        "confidence": float(conf) if isinstance(conf, (int, float)) else 0.0,
-    }
-
-
-def _judge_user_msg(question: str, folder_ov: str, trajectory: list[dict],
-                    candidates: list[dict], remaining: int) -> str:
-    parts = [f"QUESTION: {question}", "", f"SEARCHES REMAINING: {remaining}"]
-    if remaining <= 1:
-        parts.append("This is your LAST search — choose action=answer unless a "
-                     "structural lookup is clearly needed.")
-    parts += ["", "FOLDER OVERVIEW:", folder_ov or "(unavailable)", ""]
-    if trajectory:
-        parts.append("TRAJECTORY SO FAR:")
-        parts += [json.dumps(s, ensure_ascii=False) for s in trajectory]
-        parts.append("")
-    parts += ["CANDIDATES:", json.dumps(candidates, ensure_ascii=False), "",
-              "Respond with ONLY the JSON object."]
-    return "\n".join(parts)
-
-
-async def _judge(question: str, folder_ov: str, trajectory: list[dict],
-                 results: list[dict], remaining: int) -> dict[str, Any]:
-    data = await llm.chat_json(
-        [{"role": "system", "content": _JUDGE_SYS},
-         {"role": "user", "content": _judge_user_msg(
-             question, folder_ov, trajectory, _summarize(results), remaining)}],
-        timeout=config.llm_primary_timeout(),
-        model=config.llm_judge_model(),
-    )
-    return _normalize_verdict(data)
-
-
-async def _synthesize(question: str, chunks: list[dict], graph: dict | None,
-                      investigation: str) -> str:
-    blocks = []
-    for i, c in enumerate(chunks, start=1):
-        content = (c.get("content") or "").strip()[:1500]
-        blocks.append(f"[{i}] {c.get('file_name', '?')} (folder: {c.get('folder', '?')}):\n{content}")
-    graph_note = ""
-    if graph:
-        parts: list[str] = []
-        ents = ", ".join(e.get("canonical_name", "") for e in (graph.get("entities") or [])[:10]
-                         if e.get("canonical_name"))
-        if ents:
-            parts.append(f"Related entities: {ents}")
-        fact_lines = []
-        for f in (graph.get("facts") or [])[:8]:
-            attrs = f.get("attributes") or {}
-            extra = [x for x in (attrs.get("due_at") and f"due {attrs['due_at']}",
-                                 attrs.get("status"), attrs.get("counterparty")) if x]
-            suffix = f" ({'; '.join(extra)})" if extra else ""
-            fact_lines.append(f"- [{f.get('kind')}] {f.get('statement')}{suffix}")
-        if fact_lines:
-            parts.append("Known facts (decisions/commitments/events):\n" + "\n".join(fact_lines))
-        if parts:
-            graph_note = "\n\n" + "\n\n".join(parts)
-    user = (f"QUESTION: {question}\n\nINVESTIGATION:\n{investigation}\n\n"
-            f"SOURCES:\n{chr(10).join(blocks)}{graph_note}")
-    return await llm.chat(
-        [{"role": "system", "content": _SYNTH_SYS},
-         {"role": "user", "content": user}],
-        model=config.llm_judge_model(),
-    )
-
-
-def _citations(chunks: list[dict]) -> list[dict]:
-    return [
-        {
-            "n": i,
-            "file_name": c.get("file_name"),
-            "file_path": c.get("file_path"),
-            "folder": c.get("folder"),
-            "matched_chunk_index": c.get("matched_chunk_index"),
-            "similarity": c.get("similarity"),
-            "rerank_score": c.get("rerank_score"),
-        }
-        for i, c in enumerate(chunks, start=1)
-    ]
-
-
-def _base_response(req: Any, understanding: dict, effective_top_k: int) -> dict:
-    return {
-        "query": req.query,
-        "rewritten_query": (understanding["search_query"]
-                            if understanding["search_query"] != req.query else None),
-        "sub_queries": understanding.get("sub_queries", []),
-        "complexity": understanding.get("complexity", "moderate"),
-        "effective_top_k": effective_top_k,
-        "provider": llm.provider_status(),
-        "rerank_backend": rerank.status() if req.rerank else None,
-    }
+    return max(0.0, min(1.0, float(top)))
 
 
 def _structural_answer(inv: dict) -> str:
@@ -292,169 +95,260 @@ def _structural_answer(inv: dict) -> str:
     return "\n".join(lines)
 
 
-async def run_agentic_ask(req: Any) -> dict:
-    """Full agentic /ask. Returns the structured response for Open WebUI."""
-    from fastapi.concurrency import run_in_threadpool
+def _legacy_citations(chunks: list[dict]) -> list[dict]:
+    return [{"n": i, "file_name": c.get("file_name"), "file_path": c.get("file_path"), "folder": c.get("folder"),
+             "matched_chunk_index": c.get("matched_chunk_index"), "similarity": c.get("similarity"),
+             "rerank_score": c.get("rerank_score")} for i, c in enumerate(chunks, start=1)]
 
-    t0 = time.monotonic()
-    budget = config.agent_time_budget()
-    max_iters = max(1, config.agent_max_iters())
 
-    # 1) Query understanding (degrade-safe: identity on any failure).
-    understanding = (
-        await query_understanding.rewrite_query(req.query)
-        if req.rewrite else query_understanding.identity(req.query)
-    )
-    search_query = understanding["search_query"]
-    complexity = understanding.get("complexity", "moderate")
-    effective_top_k = (config.topk_for_complexity(complexity)
-                       if (req.adaptive_k and config.adaptive_topk_enabled())
-                       else req.top_k)
-    sub_queries = (understanding.get("sub_queries", [])
-                   if config.multi_query_enabled() else [])
-    base = _base_response(req, understanding, effective_top_k)
+def _base(req: Any, understanding: dict[str, Any], effective_top_k: int, decision: router.RouteDecision) -> dict[str, Any]:
+    return {
+        "query": req.query,
+        "mode": getattr(req, "mode", "auto"),
+        "rewritten_query": (understanding["search_query"] if understanding["search_query"] != req.query else None),
+        "sub_queries": understanding.get("sub_queries", []),
+        "complexity": understanding.get("complexity", "moderate"),
+        "effective_top_k": effective_top_k,
+        "route_reasons": decision.reasons,
+        "project": ({"id": decision.project.get("id"), "name": decision.project.get("name"),
+                     "project_key": decision.project.get("project_key")} if decision.project else None),
+        "provider": llm.provider_status(),
+        "rerank_backend": rerank.status() if req.rerank else None,
+    }
 
-    # Live folder overview for the Judge (best-effort; never blocks the answer).
-    try:
-        folder_ov = await run_in_threadpool(structural.folder_overview)
-    except Exception:
-        folder_ov = ""
 
-    # 2) Route.
-    if route(req.query, understanding) == "structural":
+def _empty(base: dict[str, Any], **over: Any) -> dict[str, Any]:
+    out = {**base, "route": "retrieval", "answer": None, "epistemic": None, "citations": [], "chunks": [],
+           "graph": None, "sufficient": True, "confidence": {"retrieval": 1.0, "cards": None, "judge": None, "final": 1.0},
+           "gaps": "", "budget": {"iterations_used": 0, "tool_calls_used": 0, "documents_used": 0, "context_tokens": 0,
+                                  "elapsed_s": 0.0, "stop_reason": None},
+           "llm_calls": 0, "tool_calls": 0, "tools_used": [], "iterations": 0, "queries_tried": [],
+           "max_iters_reached": False, "trajectory": [], "degraded": False, "degraded_reason": None,
+           "reranked": False, "rerank_error": None}
+    out.update(over)
+    return out
+
+
+# --- the agent ------------------------------------------------------------------
+
+async def run_ask(req: Any) -> dict[str, Any]:
+    budget = Budget.from_config()
+    llm_calls = 0
+    tools_used: list[str] = []
+    trajectory: list[dict[str, Any]] = []
+    degraded_reason: str | None = None
+
+    # 1) Mechanical routing: project resolution, intents, structural / digest.
+    decision = await run_in_threadpool(router.decide, req.query, getattr(req, "mode", "auto"), None,
+                                       getattr(req, "project", None), projects.resolve_project)
+    understanding = query_understanding.identity(req.query)
+    base = _base(req, understanding, req.top_k, decision)
+
+    if decision.route == "structural":
         try:
             inv = await run_in_threadpool(structural.project_inventory, req.query, None)
-            return {**base, "route": "structural", "answer": _structural_answer(inv),
-                    "structural": inv, "citations": [], "chunks": [], "graph": None,
-                    "sufficient": True, "confidence": 1.0, "gaps": "",
-                    "iterations": 0, "queries_tried": [], "max_iters_reached": False,
-                    "trajectory": [], "degraded": False, "degraded_reason": None,
-                    "reranked": False}
-        except Exception as e:  # noqa: BLE001 — fall through to semantic on any failure
-            base["degraded_reason"] = f"structural_error: {e}"
+            return _empty(base, route="structural", answer=_structural_answer(inv), structural=inv)
+        except Exception as e:  # noqa: BLE001 — fall through to retrieval
+            degraded_reason = f"structural_error: {e}"
+    if decision.route == "digest":
+        try:
+            d = await run_in_threadpool(cards_mod.latest_weekly_digest)
+        except Exception:  # noqa: BLE001
+            d = None
+        if d and d.get("markdown"):
+            return _empty(base, route="digest", answer=d["markdown"],
+                          epistemic=epistemic.parse(d["markdown"]),
+                          digest={"id": d.get("id"), "kind": d.get("kind"), "run_id": d.get("run_id"),
+                                  "created_at": str(d.get("created_at"))})
+        degraded_reason = "no_weekly_digest_yet"
 
-    # 3) Semantic first pass.
-    pool: dict[tuple, dict] = {}
-    trajectory: list[dict] = []
-    queries_tried: list[str] = []
-    first_plan = retrieval.plan_queries(understanding, sub_queries)
-    first_qs = [t for t, _ in first_plan]
+    # 2) Query understanding (one LLM call, skipped for short project lookups).
+    if req.rewrite and not decision.skip_rewrite:
+        understanding = await query_understanding.rewrite_query(req.query)
+        llm_calls += 1
+    if understanding.get("complexity") == "complex" and "multi_part" not in decision.intents:
+        decision.intents.append("multi_part")
+        decision.reasons.append("rewriter: complex")
+    complexity = understanding.get("complexity", "moderate")
+    effective_top_k = (config.topk_for_complexity(complexity)
+                       if (req.adaptive_k and config.adaptive_topk_enabled()) else req.top_k)
+    sub_queries = understanding.get("sub_queries", []) if config.multi_query_enabled() else []
+    base = _base(req, understanding, effective_top_k, decision)
+
+    # 3) First pass: cards + hybrid retrieval into the context builder.
+    ctx = ContextBuilder.from_config(budget.max_context_tokens)
+    plan = retrieval.plan_queries(understanding, sub_queries)
+    queries_tried = [t for t, _ in plan]
+    pid = decision.project["id"] if decision.project else None
+    chunks: list[dict[str, Any]] = []
+    card_hits: list[dict[str, Any]] = []
     try:
-        _merge(pool, await _retrieve(first_plan, req, effective_top_k))
-    except llm.LLMUnavailable:
-        pass  # embedding is not LLM; but keep symmetric guard
-    except Exception:
-        pass
-    queries_tried += first_qs
+        embeddings = await asyncio.gather(*[retrieval.embed_query(e) for _, e in plan])
+        file_ids = await run_in_threadpool(cards_mod.project_file_ids, pid) if pid else None
+        try:
+            card_hits = await run_in_threadpool(cards_mod.search_cards, req.query, embeddings[0], 10, req.folder, pid)
+        except Exception as e:  # noqa: BLE001 — cards are optional
+            log.debug("card search failed: %s", e)
+            card_hits = []
+        card_ranks = {c["file_id"]: c["card_rank"] for c in card_hits}
+        chunks = await retrieval.multi_search_async(
+            queries=[(t, emb) for (t, _), emb in zip(plan, embeddings)], rerank_query=req.query,
+            top_k=effective_top_k, folder=req.folder, rerank_enabled=req.rerank,
+            file_ids=file_ids or None, card_ranks=card_ranks or None)
+    except Exception as e:  # noqa: BLE001 — retrieval failure is reported, not hidden
+        degraded_reason = degraded_reason or f"retrieval_error: {type(e).__name__}: {e}"
+        log.warning("first-pass retrieval failed: %s", e)
 
-    confidence = _confidence(_ranked(pool, effective_top_k))
-    threshold = config.strong_rerank_threshold()
-    sufficient = confidence >= threshold
-    max_iters_reached = False
+    if decision.project:
+        try:
+            st = await run_in_threadpool(projects.project_state, pid)
+            ctx.add([from_project(decision.project, _state_text(decision.project, st))])
+        except Exception:  # noqa: BLE001
+            pass
+    ctx.add([from_card(c) for c in card_hits[:5]])
+    ctx.add([from_chunk(h) for h in chunks])
+
+    rerank_conf = _confidence(chunks)
+    card_conf = max((float(c["card_score"]) for c in card_hits if c.get("card_score") is not None), default=None)
+    top_files = {h.get("file_id") for h in chunks[:3]}
+    agreement = bool(card_hits) and card_hits[0]["file_id"] in top_files
+    path, gate_reason = router.gate(decision, rerank_conf, card_conf, agreement)
+    trajectory.append({"iteration": 0, "phase": "first_pass", "action": "retrieve", "queries": queries_tried,
+                       "observation": f"{len(card_hits)} card(s), {len(chunks)} passage(s); rerank {rerank_conf:.2f}; "
+                                      f"card {card_conf if card_conf is not None else '-'}; "
+                                      f"{ctx.stats()['documents_used']} doc(s) in context",
+                       "gate": path, "gate_reason": gate_reason})
+
+    # 4) Bounded investigation.
+    sufficient = path == "fast"
     last_missing = ""
-
-    # 4) Judge loop only when the first pass is not confident.
-    if not sufficient:
-        for i in range(max_iters):
-            remaining = max_iters - i
-            if time.monotonic() - t0 > budget:
-                max_iters_reached = True
+    judge_conf: float | None = None
+    if path == "investigate":
+        catalog = registry.catalog()
+        seen_calls: set[tuple[str, str]] = set()
+        for it in range(1, budget.max_iterations + 1):
+            if not budget.can_iterate():
                 break
+            phase = judge.PHASES[min(it - 1, len(judge.PHASES) - 1)]
+            snap = {**budget.snapshot(), **ctx.stats()}
             try:
-                verdict = await _judge(req.query, folder_ov, trajectory,
-                                       _ranked(pool, effective_top_k), remaining)
-            except (llm.LLMUnavailable, ValueError):
-                break  # judge unavailable → answer with what we have
-            step = {"thought": verdict["thought"], "action": verdict["action"],
-                    "queries": [], "observation": ""}
+                verdict = await judge.decide(req.query, phase, it, budget.max_iterations, catalog, trajectory,
+                                             ctx.digest(), snap, decision.project,
+                                             decision.seed_tools if it == 1 else None,
+                                             timeout=min(config.llm_primary_timeout(), max(10.0, budget.remaining_time())))
+            except (llm.LLMUnavailable, ValueError) as e:
+                trajectory.append({"iteration": it, "phase": phase, "action": "judge_error", "error": str(e)[:200]})
+                budget.stop_reason = "judge_unavailable"
+                break
+            llm_calls += 1
+            budget.iterations_used += 1
+            judge_conf = verdict["confidence"]
             last_missing = verdict["missing"] or last_missing
-
+            step: dict[str, Any] = {"iteration": it, "phase": phase, "thought": verdict["thought"],
+                                    "action": verdict["action"], "sufficient": verdict["sufficient"], "tool_calls": []}
             if verdict["action"] == "answer":
-                sufficient = verdict["sufficient"] or sufficient
+                sufficient = verdict["sufficient"]
+                budget.stop_reason = "judge_answer"
                 trajectory.append(step)
                 break
-
-            if verdict["action"] == "structural":
-                trajectory.append(step)
-                try:
-                    inv = await run_in_threadpool(
-                        structural.project_inventory, verdict["query"] or req.query, None)
-                    return {**base, "route": "structural",
-                            "answer": _structural_answer(inv), "structural": inv,
-                            "citations": [], "chunks": [], "graph": None,
-                            "sufficient": True, "confidence": 1.0, "gaps": "",
-                            "iterations": i + 1, "queries_tried": queries_tried,
-                            "max_iters_reached": False, "trajectory": trajectory,
-                            "degraded": False, "degraded_reason": None, "reranked": False}
-                except Exception:
-                    break
-
-            # action == "research": re-write + re-search.
-            nxt = [q for q in verdict["reformulations"] if q not in queries_tried]
-            step["queries"] = nxt
-            if not nxt:
+            calls: list[dict[str, Any]] = []
+            for c in verdict["tool_calls"]:
+                if len(calls) >= budget.max_tool_calls_per_iteration:
+                    step["tool_calls"].append({"tool": c["tool"], "args": c["args"], "ok": False, "error": "per_round_cap"})
+                    continue
+                spec = registry.get(c["tool"])
+                key = (c["tool"], json.dumps(c["args"], sort_keys=True, default=str))
+                if spec is None:
+                    step["tool_calls"].append({"tool": c["tool"], "args": c["args"], "ok": False, "error": "unknown_tool"})
+                elif spec.cost == "llm":
+                    step["tool_calls"].append({"tool": c["tool"], "args": c["args"], "ok": False, "error": "llm_tool_not_allowed_in_loop"})
+                elif key in seen_calls:
+                    step["tool_calls"].append({"tool": c["tool"], "args": c["args"], "ok": False, "error": "duplicate_call"})
+                else:
+                    seen_calls.add(key)
+                    calls.append(c)
+            if not calls:
+                budget.stop_reason = "no_valid_calls"
+                step["observation"] = "no valid new tool calls"
                 trajectory.append(step)
                 break
-            try:
-                added = _merge(pool, await _retrieve(nxt, req, effective_top_k))
-            except Exception:
-                added = 0
-            queries_tried += nxt
-            step["observation"] = (f"{added} new result(s); "
-                                   f"top score {_confidence(_ranked(pool, effective_top_k)):.2f}")
+            results = await asyncio.gather(*[registry.call(c["tool"], c["args"]) for c in calls])
+            added_total = 0
+            for c, r in zip(calls, results):
+                budget.tool_calls_used += 1
+                tools_used.append(c["tool"])
+                added = ctx.add(r.sources) if r.ok else 0
+                added_total += added
+                step["tool_calls"].append({"tool": c["tool"], "args": c["args"], "ok": r.ok, "summary": r.summary,
+                                           "new_sources": added, "elapsed_ms": r.elapsed_ms, "error": r.error})
+            st = ctx.stats()
+            step["observation"] = (f"{added_total} new source(s); {st['documents_used']}/{budget.max_documents} documents; "
+                                   f"{st['context_tokens']}/{budget.max_context_tokens} tokens"
+                                   + ("; document budget reached" if st["rejected_documents"] else ""))
             trajectory.append(step)
-            confidence = _confidence(_ranked(pool, effective_top_k))
-            if confidence >= threshold:
-                sufficient = True
+            if added_total == 0:
+                budget.stop_reason = "no_new_evidence"
                 break
-            if added == 0:  # no-new-docs early exit
-                break
-            if i == max_iters - 1:
-                max_iters_reached = True
+            if it == budget.max_iterations:
+                budget.stop_reason = "max_iterations"
+        if budget.stop_reason is None and budget.iterations_used >= budget.max_iterations:
+            budget.stop_reason = "max_iterations"
+    max_iters_reached = budget.stop_reason in ("max_iterations", "time_budget")
 
-    chunks = _ranked(pool, effective_top_k)
-
-    # 5) Optional graph augmentation (best-effort).
+    # Graph augmentation (compat): entities/facts matched by name, added as fact sources.
     graph = None
     if req.use_graph:
         try:
-            graph = await run_in_threadpool(retrieval.graph_only, search_query, effective_top_k)
-        except Exception:
+            graph = await run_in_threadpool(retrieval.graph_only, understanding["search_query"], effective_top_k)
+            ctx.add([from_fact(f, 0.6) for f in (graph.get("facts") or [])[:8]])
+        except Exception:  # noqa: BLE001
             graph = None
 
-    # 6) Synthesis (degrade-safe).
+    # 5) Synthesis.
+    sources_block, citations = ctx.render()
     gaps = "" if sufficient else (last_missing or
-           "Some aspects may be unanswered; a narrower follow-up or another pass may help.")
+           "Some aspects may be unanswered; a narrower follow-up or mode=investigate may help.")
     degraded = False
-    degraded_reason = base.get("degraded_reason")
     answer = None
-    if req.synthesize and chunks:
-        budget_note = ("The search budget (max iterations) was reached without a "
-                       "fully confident answer. " if max_iters_reached else "")
-        investigation = (f"{budget_note}Queries tried: {queries_tried}. "
-                         f"Sufficient: {sufficient}. Missing: {gaps or 'nothing notable'}.")
+    if req.synthesize and ctx.sources:
+        budget_note = ("The investigation budget was exhausted before a fully confident answer was reached. "
+                       if max_iters_reached else "")
+        investigation = (f"{budget_note}Route: {path} ({gate_reason}). Queries tried: {queries_tried}. "
+                         f"Tools used: {tools_used or 'none'}. Sufficient: {sufficient}. "
+                         f"Missing: {gaps or 'nothing notable'}.")
+        user = f"QUESTION: {req.query}\n\nINVESTIGATION:\n{investigation}\n\nSOURCES:\n{sources_block}"
         try:
-            answer = await _synthesize(req.query, chunks, graph, investigation)
+            answer = await llm.chat([{"role": "system", "content": _SYNTH_SYS}, {"role": "user", "content": user}],
+                                    model=config.llm_judge_model(), timeout=budget.synthesis_timeout())
+            llm_calls += 1
         except llm.LLMUnavailable as e:
             # Local-first: no cloud fallback, so an unreachable Mac is an error,
             # not a silently degraded answer. synthesize=false still returns sources.
             raise HTTPException(status_code=503, detail=llm.unavailable_detail(e))
-    elif req.synthesize and not chunks:
+    elif req.synthesize and not ctx.sources:
         degraded = True
         degraded_reason = degraded_reason or "no_results"
 
+    final_conf = judge_conf if judge_conf is not None else max(rerank_conf, card_conf or 0.0)
     return {
         **base,
-        "route": "semantic",
+        "route": path,
         "answer": answer,
         "epistemic": epistemic.parse(answer) if answer else None,
-        "citations": _citations(chunks),
+        "citations": citations,
+        "sources": [s.citation(i) | {"text": s.text} for i, s in enumerate(ctx.ordered(), start=1)] if not req.synthesize else None,
         "chunks": chunks,
+        "chunk_citations": _legacy_citations(chunks),
         "graph": graph,
         "sufficient": sufficient,
-        "confidence": round(confidence, 4),
+        "confidence": {"retrieval": round(rerank_conf, 4), "cards": card_conf, "judge": judge_conf,
+                       "final": round(float(final_conf), 4)},
         "gaps": gaps,
-        "iterations": len(trajectory),
+        "budget": {**budget.snapshot(), **ctx.stats()},
+        "llm_calls": llm_calls,
+        "tool_calls": budget.tool_calls_used,
+        "tools_used": tools_used,
+        "iterations": budget.iterations_used,
         "queries_tried": queries_tried,
         "max_iters_reached": max_iters_reached,
         "trajectory": trajectory,
@@ -463,3 +357,6 @@ async def run_agentic_ask(req: Any) -> dict:
         "reranked": bool(req.rerank and chunks and any("rerank_score" in c for c in chunks)),
         "rerank_error": rerank.last_error(),
     }
+
+
+run_agentic_ask = run_ask

@@ -90,6 +90,21 @@ def _use_parent() -> bool:
     return config.parent_context_enabled() and _parent_chunks_available()
 
 
+def _versions_present() -> bool:
+    global _VERSIONS_PRESENT
+    if _VERSIONS_PRESENT is None:
+        try:
+            with _get_engine().connect() as conn:
+                _VERSIONS_PRESENT = conn.execute(
+                    text("SELECT to_regclass('public.document_versions')")).scalar() is not None
+        except Exception:
+            return False
+    return _VERSIONS_PRESENT
+
+
+_VERSIONS_PRESENT: bool | None = None
+
+
 def _fused_candidates(
     query: str,
     query_embedding: list[float],
@@ -98,6 +113,7 @@ def _fused_candidates(
     cand: int,
     limit: int,
     use_parent: bool,
+    file_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch the RRF-fused candidate pool (dense vector + lexical full-text).
 
@@ -134,6 +150,10 @@ def _fused_candidates(
     if kind:
         conditions.append("dc.metadata->>'kind' = :kind")
         params["kind"] = kind
+    if file_ids:
+        # Project / version-family scoping for the agent's targeted tools.
+        conditions.append("fr.id = ANY(CAST(:file_ids AS int[]))")
+        params["file_ids"] = list(file_ids)
 
     where = (" AND ".join(conditions)) if conditions else "TRUE"
 
@@ -173,6 +193,14 @@ def _fused_candidates(
         "LEFT JOIN parent_chunks pc ON pc.id = dc.parent_chunk_id"
         if use_parent else ""
     )
+    # Citation metadata (brief §10): section / page / date / version. Appended
+    # after the positional columns so the row indexing below stays valid.
+    if _versions_present():
+        version_select = ", dv.version_label AS version_label, dv.is_latest AS is_latest"
+        version_join = "LEFT JOIN document_versions dv ON dv.file_id = fr.id"
+    else:
+        version_select = ", NULL AS version_label, NULL AS is_latest"
+        version_join = ""
 
     # Per-file cap: a single huge file (thousands of spreadsheet chunks) would
     # otherwise fill the whole candidate pool. Each channel over-fetches, keeps at
@@ -243,12 +271,18 @@ def _fused_candidates(
                ss.start_time,
                ss.end_time,
                fused.rrf_score,
-               {parent_select}
+               {parent_select},
+               dc.section_id AS section_id,
+               dc.page_number AS page_number,
+               COALESCE(dc.heading_path, dc.metadata->>'section_path') AS heading_path,
+               fr.last_modified_at AS last_modified_at
+               {version_select}
           FROM fused
           JOIN document_chunks dc ON dc.id = fused.chunk_pk
           JOIN file_registry fr ON dc.file_id = fr.id
           LEFT JOIN speaker_segments ss ON dc.speaker_segment_id = ss.id
           {parent_join}
+          {version_join}
          ORDER BY fused.rrf_score DESC, fused.similarity DESC NULLS LAST
          LIMIT :final_limit
     """)
@@ -273,6 +307,9 @@ def _fused_candidates(
             "parent_content": row[13],
             "parent_chunk_id": row[14],
         }
+        m = row._mapping
+        for key in ("section_id", "page_number", "heading_path", "last_modified_at", "version_label", "is_latest"):
+            entry[key] = m.get(key)
         if row[9] is not None:
             entry["speaker"] = row[9]
             entry["start_time"] = float(row[10])
@@ -355,6 +392,7 @@ async def search_async(
     kind: str | None = None,
     context_window: int = 3,
     rerank_enabled: bool | None = None,
+    file_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid search + cross-encoder rerank (async). Used by /ask.
 
@@ -373,7 +411,7 @@ async def search_async(
     use_parent = _use_parent()
     # Pull the whole pool so the reranker scores everything before truncation.
     hits = await run_in_threadpool(
-        _fused_candidates, query, query_embedding, folder, kind, cand, cand, use_parent
+        _fused_candidates, query, query_embedding, folder, kind, cand, cand, use_parent, file_ids
     )
     if not hits:
         return []
@@ -395,8 +433,14 @@ async def multi_search_async(
     kind: str | None = None,
     context_window: int = 3,
     rerank_enabled: bool | None = None,
+    file_ids: list[int] | None = None,
+    card_ranks: dict[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Multi-query hybrid search + single rerank (async). Backs /ask.
+
+    ``card_ranks`` ({file_id: rank}) is the card-first channel (brief §8
+    "intelligence matching"): chunks of documents whose CARD matched the query
+    get an extra RRF term so they are promoted into the rerank pool.
 
     Each ``(query_text, query_embedding)`` pair contributes its own fused
     candidate pool; the pools are merged (deduped by chunk, keeping the best RRF
@@ -418,7 +462,7 @@ async def multi_search_async(
 
     pools = await asyncio.gather(*[
         run_in_threadpool(
-            _fused_candidates, q_text, q_emb, folder, kind, cand, cand, use_parent
+            _fused_candidates, q_text, q_emb, folder, kind, cand, cand, use_parent, file_ids
         )
         for q_text, q_emb in queries
     ])
@@ -431,6 +475,13 @@ async def multi_search_async(
             prev = merged.get(key)
             if prev is None or hit["rrf_score"] > prev["rrf_score"]:
                 merged[key] = hit
+    if card_ranks:
+        k, w = config.rrf_k(), config.rrf_card_weight()
+        for hit in merged.values():
+            rank = card_ranks.get(hit["file_id"])
+            if rank is not None:
+                hit["rrf_score"] = round(hit["rrf_score"] + w / (k + rank), 6)
+                hit["card_rank"] = rank
     hits = sorted(merged.values(), key=lambda h: h["rrf_score"], reverse=True)
     if not hits:
         return []
@@ -463,6 +514,10 @@ def _chunk_result(
     }
     if "rerank_score" in hit:
         result["rerank_score"] = hit["rerank_score"]
+    for key in ("file_id", "section_id", "page_number", "heading_path", "last_modified_at",
+                "version_label", "is_latest"):
+        if hit.get(key) is not None:
+            result[key] = hit[key]
     if matched_index is not None:
         result["matched_chunk_index"] = matched_index
     if context_range is not None:
@@ -1109,7 +1164,7 @@ def knowledge_search(
     facts = _safe(lambda: facts_in_text(query, limit=top_k), [])
     summaries = []
     for hit in chunks[:top_k]:
-        summary = _safe(lambda: get_document_summary(file_name=hit.get("file_name")), None)
+        summary = _safe(lambda: get_document_summary(file_id=hit.get("file_id"), file_name=None) if hit.get("file_id") else get_document_summary(file_name=hit.get("file_name")), None)
         if summary:
             summaries.append(summary)
     return {
