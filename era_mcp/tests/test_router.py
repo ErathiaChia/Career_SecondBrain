@@ -58,3 +58,13 @@ def test_mode_override_and_gate(monkeypatch):
 def test_multi_part_and_complexity():
     assert "multi_part" in router.decide("what did we promise and also when is UAT?").intents
     assert "multi_part" in router.decide("x", understanding={"complexity": "complex"}).intents
+
+
+def test_phase5_seeds():
+    d = router.decide("build STAR examples for stakeholder management")
+    assert "star" in d.intents and d.seed_tools[0] == "build_star_examples"
+    d = router.decide("compare the Acme and Orion projects")
+    assert "compare_projects" in d.intents and "compare_documents" not in d.seed_tools
+    d = router.decide("compare v2 and v3 of the proposal")
+    assert "compare" in d.intents and "compare_projects" not in d.intents
+    assert "career_timeline" in router.decide("show my career timeline").seed_tools

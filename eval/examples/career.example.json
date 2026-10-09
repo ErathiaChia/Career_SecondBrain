@@ -24,6 +24,6 @@
      "expect_projects": ["REPLACE"], "expect_tools_any": ["find_career_evidence", "get_role_history"], "min_citations": 2},
     {"id": "star-examples", "category": "interview", "mode": "investigate",
      "query": "Build me STAR interview examples from my actual career evidence.",
-     "expect_tools_any": ["get_achievement", "find_career_evidence"], "min_citations": 3}
+     "expect_tools_any": ["build_star_examples", "get_achievement", "find_career_evidence"], "min_citations": 3}
   ]
 }

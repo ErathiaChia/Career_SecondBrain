@@ -25,7 +25,8 @@ Three tools, served two ways from the same code:
 Everything else (`/projects/*`, `/facts/*`, `/entities/*`, `/graph/*`,
 `/structure/*`, `/digest/*`, `/internal/tools`) is **internal**: the bounded
 agent calls those functions through its tool registry (`era_mcp/agent_tools/`,
-27 tools), and the routes stay mounted but hidden for curl debugging
+31 tools incl. `build_star_examples`, `compare_projects`, `find_career_evidence`,
+`get_role_history`, `get_kpi`), and the routes stay mounted but hidden for curl debugging
 (`INTERNAL_ROUTES_ENABLED=0` removes them). A bearer token (`API_BEARER_TOKEN`)
 gates every endpoint including `/mcp`; see `docs/clients/`.
 

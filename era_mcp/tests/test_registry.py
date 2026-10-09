@@ -72,3 +72,8 @@ def test_summary_is_capped(monkeypatch):
         assert estimate_tokens(r.summary) <= 110 and r.summary.endswith("…")
     finally:
         del registry.REGISTRY["_chatty"]
+
+
+def test_phase5_career_tools_registered():
+    assert {"build_star_examples", "compare_projects", "capability_evidence", "career_timeline"} <= set(registry.REGISTRY)
+    assert "build_star_examples(" in registry.catalog() and "career_timeline(" not in registry.catalog()

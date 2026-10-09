@@ -170,7 +170,10 @@ Career_SecondBrain/
 
 Phase status against the brief (`local/V4_Agent.md`): 0 hygiene ✓, 1 foundation ✓,
 2 cards + career layer ✓, 3 bounded agent + MCP ✓, 4 weekly report + eval ✓,
-5 career features (STAR builder, comparisons) — see `docs/adr/`.
+5 career features (STAR builder, project comparison, capability evidence, career
+timeline) ✓ — see `docs/adr/`. Remaining work is operational: run the migrations
+and `career-refresh` on the Mac, fill `local/eval/*.json`, confirm roles, and
+calibrate the gate thresholds against the first scorecard baseline.
 
 ## Private data, local-first policy and tests
 

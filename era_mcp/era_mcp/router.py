@@ -24,12 +24,18 @@ _DIGEST_RE = re.compile(
 # intent -> (seed tools, reasons). Order matters: first match wins for the
 # primary hint but all hints are recorded.
 _INTENTS: list[tuple[str, re.Pattern[str], list[str]]] = [
+    ("compare_projects", re.compile(r"\bcompare\b.{0,40}\bprojects?\b|\bprojects?\b.{0,30}\b(versus|vs\.?|compared)\b", re.I),
+     ["compare_projects"]),
+    ("star", re.compile(r"\b(star (example|stor|format)\w*|interview (example|prep|question)\w*|situation.{0,10}task.{0,10}action)\b", re.I),
+     ["build_star_examples", "get_achievement"]),
     ("compare", re.compile(r"\b(compare|diff(erence)?s?|changed between|v\d+ vs|versus|vs\.?|what changed in)\b", re.I),
      ["find_latest_version", "compare_documents"]),
     ("conflict", re.compile(r"\b(conflict|contradict|inconsisten|stale|still valid|out of date|superseded)\b", re.I),
      ["find_conflicts"]),
     ("timeline", re.compile(r"\b(timeline|history|chronolog|how did .* evolve|over time|sequence of events)\b", re.I),
      ["get_project_history", "build_timeline"]),
+    ("career_timeline", re.compile(r"\b(my career|career (timeline|history|path)|role history|roles over time)\b", re.I),
+     ["get_role_history", "career_timeline"]),
     ("career", re.compile(r"\b(evidence (do|does|did|that|of|for)\b.{0,20}\b(i|my|me)\b|evidence (that|of) (i|my)|"
                           r"star (example|stor)\w*|interview\w*|achievement\w*|kpis?|demonstrat\w*|strongest example\w*|"
                           r"my (role|contribution|experience|track record)|what did i|have i (led|built|delivered)|"
@@ -120,6 +126,8 @@ def decide(question: str, mode: str = "auto", understanding: dict[str, Any] | No
 
     for name, rx, tools in _INTENTS:
         if rx.search(question or ""):
+            if name == "compare" and "compare_projects" in d.intents:
+                continue  # two projects, not two document versions
             d.intents.append(name)
             for t in tools:
                 if t not in d.seed_tools:

@@ -32,7 +32,9 @@ Rules:
 - Judge sufficiency by the evidence actually in the CONTEXT DIGEST, not optimism.
 - Career questions ("evidence that I…", STAR examples, KPIs, my role) need
   find_career_evidence / get_achievement / get_role_history, then the source
-  documents for the strongest items.
+  documents for the strongest items. For STAR / interview requests call
+  build_star_examples (capability or project); to compare two projects call
+  compare_projects.
 
 Respond with ONLY this JSON object:
 {

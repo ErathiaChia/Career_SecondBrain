@@ -7,6 +7,7 @@ from typing import Any
 from fastapi.concurrency import run_in_threadpool
 
 from era_mcp import career as career_mod
+from era_mcp import career_deliverables as cd
 from era_mcp import cards as cards_mod
 from era_mcp import deliverables, projects, retrieval
 from era_mcp.agent_tools import _common
@@ -209,3 +210,103 @@ async def find_similar_projects(project: str | None = None, query: str | None = 
                                f"shared {r.get('shared_entities') or r.get('shared') or ''}", relevance=float(r.get("score") or r.get("cosine") or 0.5))
                for r in rows]
     return ToolResult(ok=True, summary=f"{len(rows)} similar project(s): " + _common.head([r.get("name") for r in rows], 5), sources=sources)
+
+
+# --- Phase 5: STAR, comparison, capability evidence, timeline deliverables ---------------
+
+async def _project_bundle(p: dict[str, Any]) -> dict[str, Any]:
+    st = await run_in_threadpool(projects.project_state, p["id"])
+    roles = [r for r in await run_in_threadpool(career_mod.role_history, True) if r["project_id"] == p["id"]]
+    confirmed = [r for r in roles if r.get("status") == "confirmed"]
+    role = (confirmed or sorted(roles, key=lambda r: -float(r.get("confidence") or 0))[:1] or [None])[0]
+    facts = await run_in_threadpool(projects.project_facts, p["id"],
+                                    ["contribution", "outcome", "lesson", "requirement", "decision", "milestone", "open_question"],
+                                    False, 120)
+    achs = await run_in_threadpool(career_mod.achievements, p["id"], None, False, True, 10)
+    return {"project": p, "state": st, "role": role, "facts": facts, "achievements": achs}
+
+
+def _bundle_sources(b: dict[str, Any], text: str) -> list[Source]:
+    out = [from_project(b["project"], text[:4000], 0.95)]
+    out += [from_fact(f, 0.9) for f in (b.get("facts") or [])[:12]]
+    out += [_ach_source(a) for a in (b.get("achievements") or [])[:5]]
+    return out
+
+
+@tool("build_star_examples", "career",
+      "STAR interview examples (Situation / Task / Action / Result) from my evidence: for a capability (e.g. 'leading AI delivery') or one project. Every line cites [F<id>, file].",
+      {"type": "object", "properties": {"capability": {"type": "string"}, "project": {"type": "string"},
+                                        "limit": {"type": "integer"}}}, max_result_tokens=2500)
+async def build_star_examples(capability: str | None = None, project: str | None = None, limit: int = 3) -> ToolResult:
+    if project:
+        p = await _common.resolve(project)
+        if p is None:
+            return _common.not_found(project)
+        pids = [p["id"]]
+    else:
+        skills = await run_in_threadpool(career_mod.skill_evidence, capability, 40) if capability else []
+        facts = await run_in_threadpool(career_mod.contribution_facts, capability, 40) if capability else []
+        for f in facts:  # contribution_facts carries project name; map to id via roles
+            f.setdefault("project_id", None)
+        roles = await run_in_threadpool(career_mod.role_history, True)
+        name_to_id = {r["project"]: r["project_id"] for r in roles}
+        for f in facts:
+            if f.get("project_id") is None and f.get("project") in name_to_id:
+                f["project_id"] = name_to_id[f["project"]]
+        pids = cd.pick_star_projects(capability, skills, facts, roles, limit=limit)
+    if not pids:
+        return ToolResult(ok=True, summary="no projects with career evidence yet (run career-refresh on the Mac)", data={"count": 0})
+    sections, sources, names = [], [], []
+    for pid in pids[:limit]:
+        p = await run_in_threadpool(projects.resolve_project, pid)
+        if not p:
+            continue
+        b = await _project_bundle(p)
+        md = cd.render_star(p, b["state"], b["role"], b["facts"], b["achievements"])
+        sections.append(md)
+        names.append(p["name"])
+        sources += _bundle_sources(b, md)
+    markdown = "\n\n---\n\n".join(sections)
+    return ToolResult(ok=True, summary=f"{len(sections)} STAR example(s): {', '.join(names)}\n" + markdown[:1800],
+                      sources=sources, data={"markdown": markdown, "projects": names})
+
+
+@tool("compare_projects", "career",
+      "Side-by-side comparison of two projects: client, stage, my role, technologies, outcomes, timeline, health.",
+      {"type": "object", "properties": {"project_a": {"type": "string"}, "project_b": {"type": "string"}},
+       "required": ["project_a", "project_b"]}, max_result_tokens=2000)
+async def compare_projects(project_a: str, project_b: str) -> ToolResult:
+    pa = await _common.resolve(project_a)
+    pb = await _common.resolve(project_b)
+    if pa is None:
+        return _common.not_found(project_a)
+    if pb is None:
+        return _common.not_found(project_b)
+    ba, bb = await _project_bundle(pa), await _project_bundle(pb)
+    md = cd.render_compare(ba, bb)
+    return ToolResult(ok=True, summary=md[:1800], sources=_bundle_sources(ba, md) + _bundle_sources(bb, md)[1:],
+                      data={"markdown": md})
+
+
+@tool("capability_evidence", "career",
+      "Rendered evidence for a capability grouped by activity (leadership / architecture / presales / delivery / product), with achievements. Use after find_career_evidence when a formatted write-up is wanted.",
+      {"type": "object", "properties": {"capability": {"type": "string"}}, "required": ["capability"]},
+      judge_visible=False, max_result_tokens=2000)
+async def capability_evidence(capability: str) -> ToolResult:
+    skills = await run_in_threadpool(career_mod.skill_evidence, capability, 20)
+    facts = await run_in_threadpool(career_mod.contribution_facts, capability, 30)
+    achs = await run_in_threadpool(career_mod.achievements, None, capability, False, True, 10)
+    md = cd.render_capability_evidence(capability, skills, facts, achs)
+    sources = [from_fact(f, 0.9) for f in facts[:12]] + [_ach_source(a) for a in achs[:6]]
+    return ToolResult(ok=True, summary=md[:1800], sources=sources, data={"markdown": md})
+
+
+@tool("career_timeline", "career", "My dated career timeline (roles per project, achievements) as markdown.",
+      {"type": "object", "properties": {}}, judge_visible=False, max_result_tokens=2000)
+async def career_timeline() -> ToolResult:
+    roles = await run_in_threadpool(career_mod.role_history, True)
+    achs = await run_in_threadpool(career_mod.achievements, None, None, False, True, 60)
+    md = cd.render_career_timeline(roles, achs)
+    return ToolResult(ok=True, summary=md[:1800], sources=[Source(kind="role", text=md[:4000], relevance=0.9)],
+                      data={"markdown": md})
+
