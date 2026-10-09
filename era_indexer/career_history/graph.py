@@ -169,7 +169,9 @@ def refresh_documents(
         max_chars=window_chars * max_windows,
     )
     track_changes = _change_tracking_enabled()
+    total = len(docs)
     processed = failed = entity_count = relationship_count = fact_count = 0
+    console.log(f"[bold]Document extraction[/bold]: {total} file(s) to process")
     for doc in docs:
         try:
             extracted = extract_document(doc, window_chars=window_chars, max_windows=max_windows)
@@ -177,20 +179,26 @@ def refresh_documents(
             db.clear_chunk_graph_data(doc["rep_chunk_id"])
             ctx = {"file_id": doc["file_id"], "chunk_id": doc["rep_chunk_id"], "section_id": None}
             ids_by_key = _persist_entities(ctx, extracted.get("entities", []))
+            rel = _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
+            facts = _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
             entity_count += len(ids_by_key)
-            relationship_count += _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
-            fact_count += _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
+            relationship_count += rel
+            fact_count += facts
             if track_changes and old_facts:
                 _record_fact_diff(doc["file_id"], old_facts)
             db.mark_graph_chunk_extracted(doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION)
             processed += 1
+            console.log(
+                f"[green][{processed}/{total}][/green] {doc['file_name']} — "
+                f"{len(ids_by_key)} ent, {rel} rel, {facts} facts"
+            )
         except Exception as e:
             failed += 1
             db.mark_graph_chunk_extracted(
                 doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
                 status="failed", error_message=f"{type(e).__name__}: {e}",
             )
-            console.log(f"[red]Doc extraction failed[/red] {doc['file_name']}: {e}")
+            console.log(f"[red][{processed + failed}/{total}] FAILED[/red] {doc['file_name']}: {e}")
     db.cleanup_orphan_graph_rows()
     snapshot = build_and_save_snapshot(folder=folder) if rebuild_snapshot else None
     return {
