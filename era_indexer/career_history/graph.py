@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 import math
 import os
 import re
 import urllib.error
 import urllib.request
 from collections import defaultdict
-from typing import Any
+from typing import Any, Callable
 
 from rich.console import Console
 
@@ -156,37 +157,54 @@ def refresh_documents(
     limit: int | None = None,
     force: bool = False,
     rebuild_snapshot: bool = True,
+    deadline: datetime | None = None,
+    upgrade: bool = False,
+    progress: Callable[[int, int, int], None] | None = None,
 ) -> dict[str, Any]:
-    """Document-level extraction: ONE LLM call per FILE (its chunks concatenated
-    and capped to MAX_DOC_CHARS), instead of per chunk. The scalable path for
-    large vaults — ~one call per file vs tens of thousands. Entities/relationships/
-    facts are persisted against the file's representative (first) chunk; the run is
-    incremental + folder-scoped via graph_extraction_state (DOC_EXTRACTOR_VERSION)."""
+    """Document-level extraction: ONE LLM call per window of a FILE (its chunks
+    concatenated), instead of per chunk. Entities/relationships/facts are
+    persisted DOCUMENT-scoped (chunk_id NULL, so a re-embed never cascades them
+    away) and the run is incremental via document_extraction_state keyed by file.
+
+    ``limit`` caps the files this run; ``deadline`` stops before starting a file
+    past that time (the run stays resumable); ``upgrade`` also re-selects files
+    extracted at an older DOC_EXTRACTOR_VERSION; ``progress(done, failed, total)``
+    is called after every file (the weekly pipeline heartbeats with it)."""
     window_chars, max_windows = _doc_window_settings()
     docs = db.documents_for_extraction(
         folder=folder, limit=limit,
         extractor_version=DOC_EXTRACTOR_VERSION, force=force,
-        max_chars=window_chars * max_windows,
+        max_chars=window_chars * max_windows, upgrade=upgrade,
+        priority_folders=_priority_folders(),
     )
     track_changes = _change_tracking_enabled()
     total = len(docs)
     processed = failed = entity_count = relationship_count = fact_count = 0
+    stopped_early = False
     console.log(f"[bold]Document extraction[/bold]: {total} file(s) to process")
     for doc in docs:
+        if deadline is not None and datetime.now() >= deadline:
+            stopped_early = True
+            console.log(f"[yellow]Deadline reached[/yellow] after {processed + failed}/{total} file(s); "
+                        "the rest resumes next run.")
+            break
         try:
             extracted = extract_document(doc, window_chars=window_chars, max_windows=max_windows)
             old_facts = _file_facts(doc["file_id"]) if track_changes else []
-            db.clear_chunk_graph_data(doc["rep_chunk_id"])
-            ctx = {"file_id": doc["file_id"], "chunk_id": doc["rep_chunk_id"], "section_id": None}
-            ids_by_key = _persist_entities(ctx, extracted.get("entities", []))
-            rel = _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
-            facts = _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
+            db.clear_document_graph_data(doc["file_id"])
+            ctx = {"file_id": doc["file_id"], "chunk_id": None, "section_id": None}
+            ids_by_key = _persist_entities(ctx, extracted.get("entities", []), version=DOC_EXTRACTOR_VERSION)
+            rel = _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key,
+                                         version=DOC_EXTRACTOR_VERSION)
+            facts = _persist_facts(ctx, extracted.get("facts", []), ids_by_key, version=DOC_EXTRACTOR_VERSION)
             entity_count += len(ids_by_key)
             relationship_count += rel
             fact_count += facts
             if track_changes and old_facts:
-                _record_fact_diff(doc["file_id"], old_facts)
-            db.mark_graph_chunk_extracted(doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION)
+                _record_fact_diff(doc["file_id"], old_facts, version=DOC_EXTRACTOR_VERSION)
+            db.mark_document_extracted(doc["file_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
+                                       windows=extracted.get("windows"), keep_intelligence_version=True)
+            _after_document_extracted(doc, extracted)
             processed += 1
             console.log(
                 f"[green][{processed}/{total}][/green] {doc['file_name']} — "
@@ -194,11 +212,13 @@ def refresh_documents(
             )
         except Exception as e:
             failed += 1
-            db.mark_graph_chunk_extracted(
-                doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
-                status="failed", error_message=f"{type(e).__name__}: {e}",
+            db.mark_document_extracted(
+                doc["file_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
+                status="failed", error_message=f"{type(e).__name__}: {e}", keep_intelligence_version=True,
             )
             console.log(f"[red][{processed + failed}/{total}] FAILED[/red] {doc['file_name']}: {e}")
+        if progress is not None:
+            progress(processed, failed, total)
     db.cleanup_orphan_graph_rows()
     snapshot = build_and_save_snapshot(folder=folder) if rebuild_snapshot else None
     return {
@@ -208,8 +228,30 @@ def refresh_documents(
         "entities_seen": entity_count,
         "relationships_seen": relationship_count,
         "facts_seen": fact_count,
+        "stopped_early": stopped_early,
+        "remaining": max(0, total - processed - failed) if stopped_early else 0,
         "snapshot": snapshot,
     }
+
+
+def _priority_folders() -> list[str]:
+    try:
+        return list((config.get().get("extraction") or {}).get("priority_folders") or [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _after_document_extracted(doc: dict[str, Any], extracted: dict[str, Any]) -> None:
+    """Hook for per-document intelligence built from the same extraction call
+    (document cards, Phase 2). No-op until career_history.cards exists."""
+    try:
+        from career_history import cards  # type: ignore
+    except ImportError:
+        return
+    try:
+        cards.build_card(doc["file_id"], llm_card=extracted.get("card"))
+    except Exception as e:  # noqa: BLE001 — a card failure never fails the facts
+        console.log(f"[yellow]card skipped for {doc.get('file_name')}:[/yellow] {e}")
 
 
 def _change_tracking_enabled() -> bool:
@@ -228,10 +270,10 @@ def _file_facts(file_id: int) -> list[dict[str, Any]]:
         return []
 
 
-def _record_fact_diff(file_id: int, old_facts: list[dict[str, Any]]) -> None:
+def _record_fact_diff(file_id: int, old_facts: list[dict[str, Any]], version: str = EXTRACTOR_VERSION) -> None:
     from career_history import changes
     try:
-        changes.record_fact_diff(file_id, old_facts, _file_facts(file_id), EXTRACTOR_VERSION)
+        changes.record_fact_diff(file_id, old_facts, _file_facts(file_id), version)
     except Exception as e:  # noqa: BLE001
         console.log(f"[yellow]Fact diff skipped for file {file_id}:[/yellow] {e}")
 
@@ -554,7 +596,8 @@ def build_snapshot_payload(
     }
 
 
-def _persist_entities(chunk: dict[str, Any], entities: list[dict[str, Any]]) -> dict[tuple[str, str], int]:
+def _persist_entities(chunk: dict[str, Any], entities: list[dict[str, Any]],
+                      version: str = EXTRACTOR_VERSION) -> dict[tuple[str, str], int]:
     ids_by_key: dict[tuple[str, str], int] = {}
     for entity in entities:
         name = _clean_name(entity.get("name") or entity.get("canonical_name"))
@@ -575,7 +618,7 @@ def _persist_entities(chunk: dict[str, Any], entities: list[dict[str, Any]]) -> 
             section_id=chunk.get("section_id"),
             mention_text=entity.get("mention_text") or name,
             confidence=float(entity.get("confidence") or 0.7),
-            extractor_version=EXTRACTOR_VERSION,
+            extractor_version=version,
         )
         ids_by_key[(_entity_key(name), entity_type)] = entity_id
     return ids_by_key
@@ -585,6 +628,7 @@ def _persist_relationships(
     chunk: dict[str, Any],
     relationships: list[dict[str, Any]],
     ids_by_key: dict[tuple[str, str], int],
+    version: str = EXTRACTOR_VERSION,
 ) -> int:
     count = 0
     for rel in relationships:
@@ -611,7 +655,7 @@ def _persist_relationships(
             chunk_id=chunk["chunk_id"],
             section_id=chunk.get("section_id"),
             evidence_text=_clean_evidence(rel.get("evidence") or ""),
-            extractor_version=EXTRACTOR_VERSION,
+            extractor_version=version,
         )
         count += 1
     return count
@@ -621,6 +665,7 @@ def _persist_facts(
     chunk: dict[str, Any],
     facts: list[dict[str, Any]],
     ids_by_key: dict[tuple[str, str], int],
+    version: str = EXTRACTOR_VERSION,
 ) -> int:
     """Persist typed facts, linking subject/object/project/owner to entities
     extracted in the same chunk, and ``supersedes`` to an earlier fact from the
@@ -645,7 +690,7 @@ def _persist_facts(
                 occurred_at=fact["occurred_at"],
                 source_quote=fact["quote"],
                 confidence=fact["confidence"],
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=version,
                 topic=fact["topic"],
                 status=fact["status"],
                 priority=fact["priority"],

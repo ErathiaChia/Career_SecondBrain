@@ -11,6 +11,22 @@ paths:
   source_directories:
     - "/Volumes/Synology/Vault"
     # - "/Volumes/Synology/AnotherVault"
+  # Subtrees (relative to each root; prefix or glob) never ingested — keeps the
+  # pipeline's own outputs (weekly reports) out of the index.
+  ignore_subtrees:
+    - "Z. AI_Notebook/Weekly"
+
+extraction:
+  # Folders (top-level, as stored in file_registry.folder) extracted before the
+  # rest of the backlog; within a folder most-recently-modified files go first.
+  priority_folders: []
+  # Weekly cap (also --max-docs). ~85 s/file -> 1200 ≈ 28 h.
+  max_docs_per_run: 1200
+
+eval:
+  # Write a probe file into the vault before each run so the scorecard can
+  # verify new documents reach the index (Phase 4).
+  freshness_probe_enabled: false
 
 models:
   # ---- Ollama embedding ----

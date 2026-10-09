@@ -224,6 +224,7 @@ def upsert_file(
     folder: str,
     is_audio: bool,
     mod_time: datetime,
+    size_bytes: int | None = None,
 ) -> tuple[int, bool]:
     """Register a file; returns (file_id, needs_processing). Appends an
     added/modified/restored vault event whenever the file needs processing."""
@@ -235,10 +236,14 @@ def upsert_file(
         ), {"p": file_path}).fetchone()
         if existing and existing[1] == file_hash and existing[2] is None:
             return existing[0], False
-        row = c.execute(text("""
+        has_size = _column_exists(c, "file_registry", "size_bytes")
+        size_col = ", size_bytes" if has_size else ""
+        size_val = ", :size" if has_size else ""
+        size_set = ", size_bytes = EXCLUDED.size_bytes" if has_size else ""
+        row = c.execute(text(f"""
             INSERT INTO file_registry
-                (file_path, file_name, file_type, file_hash, folder, is_audio, last_modified_at)
-            VALUES (:path, :name, :type, :hash, :folder, :is_audio, :mod)
+                (file_path, file_name, file_type, file_hash, folder, is_audio, last_modified_at{size_col})
+            VALUES (:path, :name, :type, :hash, :folder, :is_audio, :mod{size_val})
             ON CONFLICT (file_path) DO UPDATE SET
                 file_hash = EXCLUDED.file_hash,
                 file_name = EXCLUDED.file_name,
@@ -247,12 +252,12 @@ def upsert_file(
                 is_audio = EXCLUDED.is_audio,
                 last_modified_at = EXCLUDED.last_modified_at,
                 last_processed_at = NOW(),
-                deleted_at = NULL
+                deleted_at = NULL{size_set}
             RETURNING id
         """), {
             "path": file_path, "name": file_name, "type": file_type,
             "hash": file_hash, "folder": folder, "is_audio": is_audio,
-            "mod": mod_time,
+            "mod": mod_time, "size": size_bytes,
         }).fetchone()
         if existing is None:
             kind = "added"
@@ -290,6 +295,14 @@ def delete_file(file_path: str) -> None:
                       "document_chunks", "parent_chunks", "document_sections", "documents",
                       "speaker_segments", "processing_queue"):
             c.execute(text(f"DELETE FROM {table} WHERE file_id = :f"), {"f": file_id})
+        # Soft delete never fires ON DELETE CASCADE, so clear the per-file
+        # intelligence rows explicitly (tables arrive in later migrations).
+        for table in ("document_extraction_state", "document_cards"):
+            if _table_exists(c, table):
+                c.execute(text(f"DELETE FROM {table} WHERE file_id = :f"), {"f": file_id})
+        if _table_exists(c, "document_relations"):
+            c.execute(text("DELETE FROM document_relations WHERE file_id = :f OR related_file_id = :f"),
+                      {"f": file_id})
         c.execute(text("UPDATE file_registry SET deleted_at = NOW() WHERE id = :f"), {"f": file_id})
         insert_event(c, "deleted", file_path, file_id=file_id, old_hash=row[1],
                      payload={"file_name": row[2], "folder": row[3],
@@ -912,45 +925,149 @@ def documents_for_extraction(
     extractor_version: str = "doc-entity-facts-v1",
     force: bool = False,
     max_chars: int = 12000,
+    mode: str = "full",
+    upgrade: bool = False,
+    intelligence_version: str | None = None,
+    priority_folders: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """One row per FILE for document-level extraction: representative (first)
-    chunk id, the file's chunks concatenated + capped to ``max_chars``, and a
-    content hash over the full text. Incremental + folder-scoped: skips files
-    whose representative chunk is already extracted at ``extractor_version`` with
-    the same content (unless ``force``)."""
-    params: dict[str, Any] = {"extractor_version": extractor_version, "max_chars": max_chars}
-    doc_where = ["dc.content IS NOT NULL", "length(trim(dc.content)) > 0"]
+    """One row per FILE for document-level extraction: the file's chunks
+    concatenated + capped to ``max_chars`` and a content hash over the full text.
+
+    State lives in ``document_extraction_state`` (keyed by file). ``mode``:
+      * ``full`` (default): files with no state, changed content, or a failed
+        previous attempt (or everything with ``force``). An extractor-version
+        bump does NOT re-select files unless ``upgrade`` is set, so a weekly run
+        never silently re-extracts the whole vault.
+      * ``card_backfill``: files already extracted at the current content whose
+        document card is missing or older than ``intelligence_version``.
+
+    Order: ``priority_folders`` first, then most recently modified first, so a
+    capped run always covers this week's changes before any backlog.
+    """
+    params: dict[str, Any] = {"extractor_version": extractor_version, "max_chars": max_chars,
+                              "intelligence_version": intelligence_version,
+                              "priority": list(priority_folders or [])}
+    doc_where = ["dc.content IS NOT NULL", "length(trim(dc.content)) > 0", "fr.deleted_at IS NULL"]
     if folder:
         doc_where.append("fr.folder = :folder")
         params["folder"] = folder
-    state_where = "" if force else (
-        "WHERE ges.chunk_id IS NULL "
-        "OR ges.extractor_version <> :extractor_version "
-        "OR ges.content_hash <> d.content_hash "
-        "OR ges.status = 'failed'"
-    )
+    if mode == "card_backfill":
+        state_where = ("WHERE des.status = 'done' AND des.content_hash = d.content_hash "
+                       "AND des.intelligence_version IS DISTINCT FROM :intelligence_version")
+    elif force:
+        state_where = ""
+    else:
+        clauses = ["des.file_id IS NULL", "des.content_hash <> d.content_hash", "des.status = 'failed'"]
+        if upgrade:
+            clauses.append("des.extractor_version <> :extractor_version")
+        state_where = "WHERE " + " OR ".join(clauses)
     sql = f"""
         WITH docs AS (
-            SELECT fr.id AS file_id, fr.file_name, fr.folder, fr.file_type,
+            SELECT fr.id AS file_id, fr.file_name, fr.folder, fr.file_type, fr.last_modified_at,
                    min(dc.id) AS rep_chunk_id,
                    left(string_agg(dc.content, ' ' ORDER BY dc.chunk_index), :max_chars) AS content,
                    md5(string_agg(coalesce(dc.content, ''), '' ORDER BY dc.chunk_index)) AS content_hash
               FROM document_chunks dc
               JOIN file_registry fr ON fr.id = dc.file_id
              WHERE {" AND ".join(doc_where)}
-             GROUP BY fr.id, fr.file_name, fr.folder, fr.file_type
+             GROUP BY fr.id, fr.file_name, fr.folder, fr.file_type, fr.last_modified_at
         )
-        SELECT d.file_id, d.file_name, d.folder, d.file_type, d.rep_chunk_id, d.content, d.content_hash
+        SELECT d.file_id, d.file_name, d.folder, d.file_type, d.rep_chunk_id, d.content, d.content_hash,
+               des.extractor_version AS prior_version, des.intelligence_version AS prior_intelligence_version
           FROM docs d
-          LEFT JOIN graph_extraction_state ges ON ges.chunk_id = d.rep_chunk_id
+          LEFT JOIN document_extraction_state des ON des.file_id = d.file_id
          {state_where}
-         ORDER BY d.folder, d.file_name
+         ORDER BY (CASE WHEN d.folder = ANY(CAST(:priority AS text[])) THEN 0 ELSE 1 END),
+                  d.last_modified_at DESC NULLS LAST, d.folder, d.file_name
     """
     if limit:
         sql += f" LIMIT {int(limit)}"
     with conn() as c:
         rows = c.execute(text(sql), params).fetchall()
     return [dict(r._mapping) for r in rows]
+
+
+def extraction_backlog(folder: str | None = None) -> int:
+    """Files with chunks that still need document-level extraction. Cheap proxy
+    (no content hashing): missing state, failed state, or re-processed since the
+    last extraction (``last_processed_at`` moves on every content change)."""
+    params: dict[str, Any] = {}
+    where = ["fr.deleted_at IS NULL", "EXISTS (SELECT 1 FROM document_chunks dc WHERE dc.file_id = fr.id)"]
+    if folder:
+        where.append("fr.folder = :folder")
+        params["folder"] = folder
+    with conn() as c:
+        if not _table_exists(c, "document_extraction_state"):
+            return 0
+        return int(c.execute(text(f"""
+            SELECT count(*) FROM file_registry fr
+              LEFT JOIN document_extraction_state des ON des.file_id = fr.id
+             WHERE {" AND ".join(where)}
+               AND (des.file_id IS NULL OR des.status = 'failed'
+                    OR fr.last_processed_at > des.extracted_at)
+        """), params).scalar() or 0)
+
+
+def mark_document_extracted(
+    file_id: int,
+    content_hash: str,
+    extractor_version: str,
+    status: str = "done",
+    error_message: str | None = None,
+    intelligence_version: str | None = None,
+    windows: int | None = None,
+    keep_intelligence_version: bool = False,
+) -> None:
+    """Upsert the per-file extraction state. With ``keep_intelligence_version``
+    an existing card version survives (used when only facts were re-done)."""
+    with conn() as c:
+        c.execute(text(f"""
+            INSERT INTO document_extraction_state
+                (file_id, content_hash, extractor_version, intelligence_version, status,
+                 error_message, windows, extracted_at)
+            VALUES (:file_id, :content_hash, :extractor_version, :iv, :status, :error_message, :windows, NOW())
+            ON CONFLICT (file_id) DO UPDATE SET
+                content_hash = EXCLUDED.content_hash,
+                extractor_version = EXCLUDED.extractor_version,
+                intelligence_version = {"document_extraction_state.intelligence_version" if keep_intelligence_version else "EXCLUDED.intelligence_version"},
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message,
+                windows = COALESCE(EXCLUDED.windows, document_extraction_state.windows),
+                extracted_at = NOW()
+        """), {"file_id": file_id, "content_hash": content_hash, "extractor_version": extractor_version,
+               "iv": intelligence_version, "status": status, "error_message": error_message,
+               "windows": windows})
+        if status == "done" and _column_exists(c, "file_registry", "intelligence_version"):
+            c.execute(text("UPDATE file_registry SET intelligence_version = :iv WHERE id = :f"),
+                      {"iv": intelligence_version, "f": file_id})
+
+
+def clear_document_graph_data(file_id: int) -> None:
+    """Remove a file's DOCUMENT-scoped graph rows (chunk_id IS NULL) before
+    re-extraction. Chunk-scoped rows (chunk-level mode) and deterministic
+    path-seed mentions are untouched."""
+    with conn() as c:
+        c.execute(text("DELETE FROM relationship_evidence WHERE file_id = :f AND chunk_id IS NULL"), {"f": file_id})
+        c.execute(text("""DELETE FROM entity_mentions
+                           WHERE file_id = :f AND chunk_id IS NULL AND extractor_version <> 'path-seed-v1'"""),
+                  {"f": file_id})
+        c.execute(text("DELETE FROM knowledge_facts WHERE file_id = :f AND chunk_id IS NULL"), {"f": file_id})
+
+
+_FILE_VERSION_COLUMNS = ("size_bytes", "parser_version", "embedding_model", "embedding_version",
+                         "intelligence_version", "indexed_at")
+
+
+def set_file_versions(file_id: int, **values: Any) -> None:
+    """Record processing versions on file_registry (brief §5). Unknown keys are
+    ignored; silently a no-op until migration 0016 is applied."""
+    with conn() as c:
+        sets = [f"{k} = :{k}" for k in values if k in _FILE_VERSION_COLUMNS
+                and _column_exists(c, "file_registry", k)]
+        if not sets:
+            return
+        c.execute(text(f"UPDATE file_registry SET {', '.join(sets)} WHERE id = :file_id"),
+                  {**{k: v for k, v in values.items() if k in _FILE_VERSION_COLUMNS}, "file_id": file_id})
 
 
 def clear_chunk_graph_data(chunk_id: int) -> None:
@@ -988,6 +1105,23 @@ def mark_graph_chunk_extracted(
 
 
 _ENTITY_MERGES_PRESENT: bool | None = None
+_COLUMNS: dict[tuple[str, str], bool] = {}
+
+
+def _column_exists(c, table: str, column: str) -> bool:
+    """Cached check so code can stay compatible with a DB that has not had the
+    latest additive migration applied yet (migrate is idempotent; run it)."""
+    key = (table, column)
+    if key not in _COLUMNS:
+        _COLUMNS[key] = c.execute(text("""
+            SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = :t AND column_name = :col
+        """), {"t": table, "col": column}).fetchone() is not None
+    return _COLUMNS[key]
+
+
+def _table_exists(c, table: str) -> bool:
+    return c.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{table}"}).scalar() is not None
 
 
 def _has_entity_merges(c) -> bool:
@@ -1044,7 +1178,7 @@ def upsert_entity(
 def insert_entity_mention(
     entity_id: int,
     file_id: int,
-    chunk_id: int,
+    chunk_id: int | None,
     section_id: int | None,
     mention_text: str,
     confidence: float,
@@ -1108,7 +1242,7 @@ def upsert_relationship(
 def insert_relationship_evidence(
     relationship_id: int,
     file_id: int,
-    chunk_id: int,
+    chunk_id: int | None,
     section_id: int | None,
     evidence_text: str,
     extractor_version: str,
@@ -1173,26 +1307,33 @@ def insert_fact(
     priority: str | None = None,
     owner_entity_id: int | None = None,
     supersedes_fact_id: int | None = None,
+    run_id: str | None = None,
 ) -> int:
-    """Insert one structured fact. Facts are cleared per-chunk before
-    re-extraction (see clear_chunk_graph_data), so no upsert. last_verified_at is
-    when the source last asserted the fact: occurred_at, else the file's mtime."""
+    """Insert one structured fact. Facts are cleared per-file/per-chunk before
+    re-extraction (clear_document_graph_data / clear_chunk_graph_data), so no
+    upsert. last_verified_at is when the source last asserted the fact:
+    occurred_at, else the file's mtime. ``run_id`` (default: ERA_RUN_ID set by
+    the weekly pipeline) scopes "new this week" in the weekly report."""
+    run_id = run_id or os.environ.get("ERA_RUN_ID") or None
     with conn() as c:
-        row = c.execute(text("""
+        has_run = _column_exists(c, "knowledge_facts", "run_id")
+        row = c.execute(text(f"""
             INSERT INTO knowledge_facts
                 (kind, statement, subject_entity_id, object_entity_id, project_entity_id,
                  attributes, occurred_at, file_id, chunk_id, source_quote, confidence,
                  extractor_version, topic, status, priority, owner_entity_id,
-                 supersedes_fact_id, last_verified_at)
+                 supersedes_fact_id, last_verified_at{", run_id" if has_run else ""})
             VALUES
                 (:kind, :statement, :subject_entity_id, :object_entity_id, :project_entity_id,
                  CAST(:attributes AS jsonb), CAST(:occurred_at AS timestamp), :file_id, :chunk_id,
                  :source_quote, :confidence, :extractor_version, :topic, :status, :priority,
                  :owner_entity_id, :supersedes_fact_id,
                  COALESCE(CAST(:occurred_at AS timestamp),
-                          (SELECT last_modified_at FROM file_registry WHERE id = :file_id), NOW()))
+                          (SELECT last_modified_at FROM file_registry WHERE id = :file_id), NOW())
+                 {", :run_id" if has_run else ""})
             RETURNING id
         """), {
+            "run_id": run_id,
             "topic": topic,
             "status": status,
             "priority": priority,
@@ -1448,6 +1589,14 @@ def upsert_document_summary(
             "prompt_version": prompt_version, "source_hash": source_hash,
             "metadata": json.dumps(metadata or {}),
         }).fetchone()
+        # One summary per (file, model, prompt): rows for older content hashes
+        # used to accumulate forever.
+        c.execute(text("""
+            DELETE FROM document_summaries
+             WHERE file_id = :file_id AND model = :model AND prompt_version = :prompt_version
+               AND source_hash <> :source_hash
+        """), {"file_id": file_id, "model": model, "prompt_version": prompt_version,
+               "source_hash": source_hash})
         return row[0]
 
 

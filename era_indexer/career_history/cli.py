@@ -286,10 +286,14 @@ def extract_documents_cmd(
     folder: Optional[str] = typer.Option(None, "--folder", "-f"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n"),
     force: bool = typer.Option(False, "--force"),
+    upgrade: bool = typer.Option(False, "--upgrade", help="Also re-extract files done at an older extractor version."),
+    deadline: Optional[str] = typer.Option(None, "--deadline", help="Stop before starting a file past this time ('HH:MM', '+2h', ISO)."),
 ):
     """Document-level graph extraction: ONE LLM call per FILE (not per chunk).
     The scalable path for large vaults. Folder-scoped + incremental + resumable."""
-    result = graph.refresh_documents(folder=folder, limit=limit, force=force)
+    from career_history.weekly import parse_deadline
+    result = graph.refresh_documents(folder=folder, limit=limit, force=force, upgrade=upgrade,
+                                     deadline=parse_deadline(deadline))
     table = Table(title="Document extraction" + (f" - {folder}" if folder else ""))
     table.add_column("Field")
     table.add_column("Value", justify="right")
@@ -525,6 +529,36 @@ def monitor_cmd(
     from career_history import monitor
     _print_result("Monitor", monitor.run(folder=folder, skip_sync=skip_sync, skip_extract=skip_extract,
                                          use_llm=not no_llm, threshold=threshold))
+
+
+@app.command("weekly")
+def weekly_cmd(
+    kind: str = typer.Option("weekly", "--kind", help="weekly | manual | catchup | weekday_sync"),
+    max_docs: Optional[int] = typer.Option(1200, "--max-docs", help="Cap on documents extracted this run."),
+    deadline: Optional[str] = typer.Option("Mon 05:00", "--deadline",
+                                           help="Hard stop: 'Mon 05:00', 'HH:MM', '+12h' or ISO."),
+    catchup: bool = typer.Option(False, "--catchup", help="Only run if the last run was partial/failed and there is backlog."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the plan (backlog, deadline, models) and exit."),
+    skip_sync: bool = typer.Option(False, "--skip-sync"),
+    skip_extract: bool = typer.Option(False, "--skip-extract"),
+    no_llm: bool = typer.Option(False, "--no-llm"),
+    audio: bool = typer.Option(False, "--audio", help="Also transcribe/queue audio in the sync stage."),
+    threshold: int = typer.Option(40, "--threshold"),
+    force_hours: bool = typer.Option(False, "--force-hours", help="Allow LLM stages during weekday hours."),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
+):
+    """Weekend knowledge pipeline: preflight -> migrate -> sync -> extract (capped,
+    deadline-bound, resumable) -> projects/versions/changes/conflicts/stale ->
+    state -> digest, tracked in pipeline_runs (see scripts/weekly.sh, launchd/)."""
+    from career_history import weekly
+    result = weekly.run(kind=kind, max_docs=max_docs, deadline=deadline, catchup=catchup, dry_run=dry_run,
+                        skip_sync=skip_sync, skip_extract=skip_extract, use_llm=not no_llm, audio=audio,
+                        threshold=threshold, force_hours=force_hours, folder=folder)
+    if not dry_run:
+        _print_result("Weekly", {k: v for k, v in result.items() if k != "stages"})
+        if result.get("stages"):
+            _print_result("Stages", result["stages"])
+    raise typer.Exit(code=0 if result.get("status") in (None, "finished", "partial") or result.get("skipped") else 1)
 
 
 @app.command("digest")

@@ -7,6 +7,7 @@ appended to ``vault_events`` for project change detection.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import os
 from datetime import datetime
@@ -26,6 +27,21 @@ def _hash_file(path: str, buf: int = 65536) -> str:
         while chunk := f.read(buf):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _skip_subtree(rel_dir: str, patterns: list[str]) -> bool:
+    """True when ``rel_dir`` (relative to the scan root, '/'-separated) matches
+    one of ``paths.ignore_subtrees`` — a glob, or a prefix such as
+    "Z. AI_Notebook/Weekly" that covers everything beneath it. Used to keep the
+    pipeline's own outputs (weekly reports) from being re-ingested."""
+    rel = rel_dir.replace(os.sep, "/").strip("/")
+    for pat in patterns or []:
+        pat = pat.replace(os.sep, "/").strip("/")
+        if not pat:
+            continue
+        if rel == pat or rel.startswith(pat + "/") or fnmatch.fnmatch(rel, pat):
+            return True
+    return False
 
 
 def _folder_of(file_path: str, root: str) -> str:
@@ -52,6 +68,7 @@ def discover(
     roots = config.get_source_directories()
     audio_exts = {e.lower() for e in cfg["extensions"]["audio"]}
     doc_exts = {e.lower() for e in cfg["extensions"]["documents"]}
+    ignore_subtrees = list((cfg.get("paths") or {}).get("ignore_subtrees") or [])
 
     discovered = changed = unchanged = 0
     seen: set[str] = set()
@@ -65,7 +82,12 @@ def discover(
         scanned_roots.append((root, scan_root))
         console.log(f"[bold]Scanning[/bold] {scan_root} ({settings['label']})")
 
-        for dirpath, _, files in os.walk(scan_root):
+        for dirpath, dirs, files in os.walk(scan_root):
+            rel_dir = os.path.relpath(dirpath, root)
+            dirs[:] = [d for d in dirs
+                       if not _skip_subtree(os.path.normpath(os.path.join(rel_dir, d)), ignore_subtrees)]
+            if rel_dir != "." and _skip_subtree(rel_dir, ignore_subtrees):
+                continue
             for name in files:
                 if name.startswith("."):
                     continue
@@ -81,7 +103,8 @@ def discover(
 
                 try:
                     fhash = _hash_file(fpath)
-                    mod = datetime.fromtimestamp(os.path.getmtime(fpath))
+                    st = os.stat(fpath)
+                    mod = datetime.fromtimestamp(st.st_mtime)
                     file_id, was_changed = db.upsert_file(
                         file_path=fpath,
                         file_name=name,
@@ -90,6 +113,7 @@ def discover(
                         folder=_folder_of(fpath, root),
                         is_audio=is_audio,
                         mod_time=mod,
+                        size_bytes=st.st_size,
                     )
                     if was_changed:
                         db.enqueue(file_id)

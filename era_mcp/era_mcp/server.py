@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from era_mcp import agent, config, epistemic, llm, query_understanding, rerank, retrieval, structural
+from era_mcp.pipeline_routes import router as pipeline_router
 from era_mcp.project_routes import router as project_router
 
 app = FastAPI(
@@ -27,6 +28,7 @@ app = FastAPI(
     version="0.2.0",
 )
 app.include_router(project_router)
+app.include_router(pipeline_router)
 
 app.add_middleware(
     CORSMiddleware,

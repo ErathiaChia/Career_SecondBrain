@@ -8,6 +8,8 @@ the same connection helper. Assumes migrations 0006+ are applied
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -531,15 +533,33 @@ def clear_open_deterministic_conflicts(project_id: int) -> int:
         return result.rowcount
 
 
-def replace_stale_flags(flags: list[dict[str, Any]]) -> None:
+def replace_stale_flags(flags: list[dict[str, Any]], run_id: str | None = None) -> None:
+    """Refresh the stale set while PRESERVING flagged_at for flags that already
+    existed (so "stale since last week" is real). Before migration 0019 this
+    falls back to the old wipe-and-reinsert."""
+    run_id = run_id or os.environ.get("ERA_RUN_ID") or f"stale-{uuid.uuid4().hex[:8]}"
     with conn() as c:
-        c.execute(text("DELETE FROM stale_flags"))
+        from career_history.db import _column_exists
+        if not _column_exists(c, "stale_flags", "last_seen_run"):
+            c.execute(text("DELETE FROM stale_flags"))
+            for f in flags:
+                c.execute(text("""
+                    INSERT INTO stale_flags (object_type, object_id, reason, detail, newer_evidence_id)
+                    VALUES (:object_type, :object_id, :reason, :detail, :newer_evidence_id)
+                    ON CONFLICT (object_type, object_id, reason) DO NOTHING
+                """), f)
+            return
         for f in flags:
             c.execute(text("""
-                INSERT INTO stale_flags (object_type, object_id, reason, detail, newer_evidence_id)
-                VALUES (:object_type, :object_id, :reason, :detail, :newer_evidence_id)
-                ON CONFLICT (object_type, object_id, reason) DO NOTHING
-            """), f)
+                INSERT INTO stale_flags (object_type, object_id, reason, detail, newer_evidence_id,
+                                         run_id, last_seen_run)
+                VALUES (:object_type, :object_id, :reason, :detail, :newer_evidence_id, :run, :run)
+                ON CONFLICT (object_type, object_id, reason) DO UPDATE SET
+                    detail = EXCLUDED.detail,
+                    newer_evidence_id = EXCLUDED.newer_evidence_id,
+                    last_seen_run = EXCLUDED.last_seen_run
+            """), {**f, "run": run_id})
+        c.execute(text("DELETE FROM stale_flags WHERE last_seen_run IS DISTINCT FROM :run"), {"run": run_id})
 
 
 def set_conflict_status(conflict_id: int, status: str, latest_fact_id: int | None = None) -> bool:
@@ -705,15 +725,93 @@ def digest_inputs(since_days: int) -> dict[str, Any]:
             "proposed": proposed, "previous_keys": previous}
 
 
-def save_digest(items: list[dict[str, Any]], markdown: str, stats: dict[str, Any]) -> int:
+def save_digest(items: list[dict[str, Any]], markdown: str, stats: dict[str, Any],
+                kind: str = "attention", run_id: str | None = None) -> int:
+    run_id = run_id or os.environ.get("ERA_RUN_ID") or None
     with conn() as c:
-        row = c.execute(text("""
-            INSERT INTO digests (items, markdown, stats)
-            VALUES (CAST(:items AS jsonb), :md, CAST(:stats AS jsonb))
-            RETURNING id
-        """), {"items": json.dumps(items, default=str), "md": markdown,
-               "stats": json.dumps(stats, default=str)}).fetchone()
+        from career_history.db import _column_exists
+        if _column_exists(c, "digests", "kind"):
+            row = c.execute(text("""
+                INSERT INTO digests (items, markdown, stats, kind, run_id)
+                VALUES (CAST(:items AS jsonb), :md, CAST(:stats AS jsonb), :kind, :run_id)
+                RETURNING id
+            """), {"items": json.dumps(items, default=str), "md": markdown,
+                   "stats": json.dumps(stats, default=str), "kind": kind, "run_id": run_id}).fetchone()
+        else:
+            row = c.execute(text("""
+                INSERT INTO digests (items, markdown, stats)
+                VALUES (CAST(:items AS jsonb), :md, CAST(:stats AS jsonb))
+                RETURNING id
+            """), {"items": json.dumps(items, default=str), "md": markdown,
+                   "stats": json.dumps(stats, default=str)}).fetchone()
         return row[0]
+
+
+# --- Pipeline runs (weekly / manual / catch-up) ---------------------------------
+
+def start_pipeline_run(run_id: str, kind: str, host: str | None, git_sha: str | None,
+                       deadline: datetime | None, model_config: dict[str, Any] | None = None) -> None:
+    with conn() as c:
+        c.execute(text("""
+            INSERT INTO pipeline_runs (run_id, kind, host, git_sha, deadline_at, model_config, stage)
+            VALUES (:run_id, :kind, :host, :git_sha, :deadline, CAST(:mc AS jsonb), 'preflight')
+        """), {"run_id": run_id, "kind": kind, "host": host, "git_sha": git_sha,
+               "deadline": deadline, "mc": json.dumps(model_config or {}, default=str)})
+
+
+def heartbeat_pipeline_run(run_id: str, stage: str | None = None, stages: dict[str, Any] | None = None,
+                           counts: dict[str, Any] | None = None) -> None:
+    with conn() as c:
+        c.execute(text("""
+            UPDATE pipeline_runs
+               SET heartbeat_at = NOW(),
+                   stage = COALESCE(:stage, stage),
+                   stages = COALESCE(CAST(:stages AS jsonb), stages),
+                   counts = COALESCE(CAST(:counts AS jsonb), counts)
+             WHERE run_id = :run_id
+        """), {"run_id": run_id, "stage": stage,
+               "stages": json.dumps(stages, default=str) if stages is not None else None,
+               "counts": json.dumps(counts, default=str) if counts is not None else None})
+
+
+def finish_pipeline_run(run_id: str, status: str, stages: dict[str, Any], counts: dict[str, Any],
+                        errors: list[str], digest_id: int | None = None, notes: str | None = None) -> None:
+    with conn() as c:
+        c.execute(text("""
+            UPDATE pipeline_runs
+               SET status = :status, finished_at = NOW(), heartbeat_at = NOW(), stage = 'finalize',
+                   stages = CAST(:stages AS jsonb), counts = CAST(:counts AS jsonb),
+                   errors = CAST(:errors AS jsonb), digest_id = :digest_id, notes = :notes
+             WHERE run_id = :run_id
+        """), {"run_id": run_id, "status": status, "stages": json.dumps(stages, default=str),
+               "counts": json.dumps(counts, default=str), "errors": json.dumps(errors, default=str),
+               "digest_id": digest_id, "notes": notes})
+
+
+def latest_pipeline_run(kinds: Iterable[str] | None = None) -> dict[str, Any] | None:
+    if not table_exists("pipeline_runs"):
+        return None
+    with conn() as c:
+        if kinds:
+            rows = _rows(c.execute(text("""
+                SELECT * FROM pipeline_runs WHERE kind = ANY(CAST(:kinds AS text[]))
+                 ORDER BY started_at DESC LIMIT 1"""), {"kinds": list(kinds)}))
+        else:
+            rows = _rows(c.execute(text("SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT 1")))
+    return rows[0] if rows else None
+
+
+def previous_finished_run(before_run_id: str | None = None) -> dict[str, Any] | None:
+    """The last run that completed (finished or partial), excluding the current one;
+    the weekly report's "since" boundary."""
+    if not table_exists("pipeline_runs"):
+        return None
+    with conn() as c:
+        rows = _rows(c.execute(text("""
+            SELECT * FROM pipeline_runs
+             WHERE status IN ('finished', 'partial') AND run_id IS DISTINCT FROM :cur
+             ORDER BY started_at DESC LIMIT 1"""), {"cur": before_run_id}))
+    return rows[0] if rows else None
 
 
 def now() -> datetime:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import time
 import traceback
+from datetime import datetime
 
 from rich.console import Console
 from rich.progress import (
@@ -92,6 +93,24 @@ def _process_one(item: dict) -> None:
             queue_id, file_id, file_path, file_name, folder,
             file_hash=item.get("file_hash"),
         )
+
+
+def _stamp_versions(file_id: int, chunks: list[dict], parser_version: str) -> None:
+    """Record what produced this file's current chunks (brief §5: parser /
+    embedding model + version / indexed_at) so change detection can tell a
+    content change from a pipeline upgrade. Never fails the file."""
+    try:
+        emb_version = next((c.get("embedding_content_version") for c in chunks
+                            if c.get("embedding_content_version")), None) or structure.STRUCTURE_VERSION
+        db.set_file_versions(
+            file_id,
+            parser_version=parser_version,
+            embedding_model=(config.get().get("models") or {}).get("embedding_model"),
+            embedding_version=emb_version,
+            indexed_at=datetime.now(),
+        )
+    except Exception as e:  # noqa: BLE001
+        console.log(f"[yellow]version stamp skipped for file {file_id}:[/yellow] {e}")
 
 
 def _timed(stage_name: str, fn, *args, **kwargs):
@@ -182,6 +201,7 @@ def _process_audio(
         for c, v in zip(prepared, vectors)
     ]
     db.replace_chunks(file_id, chunks)
+    _stamp_versions(file_id, chunks, f"mlx-whisper+{structure.STRUCTURE_VERSION}")
     db.set_status(queue_id, "done")
 
 
@@ -242,6 +262,7 @@ def _process_flat_document(queue_id: int, file_id: int, text: str) -> None:
         for t, v in zip(chunks_text, vectors)
     ]
     db.replace_chunks(file_id, chunks)
+    _stamp_versions(file_id, chunks, f"{convert._artifact_version()}+flat")
     db.set_status(queue_id, "done")
 
 
@@ -321,4 +342,5 @@ def _process_structured_document(
         for c, v in zip(structured_chunks, vectors)
     ]
     db.replace_chunks(file_id, chunks)
+    _stamp_versions(file_id, chunks, f"{convert._artifact_version()}+{document.get('structure_version') or structure.STRUCTURE_VERSION}")
     db.set_status(queue_id, "done")

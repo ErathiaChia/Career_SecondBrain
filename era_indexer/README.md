@@ -369,6 +369,43 @@ Notes:
   `/facts/search`, `graph_only`, and `/knowledge/search` — no MCP change needed
   to see entities/relationships; facts get their own endpoints.
 
+## Weekly pipeline (the weekend run)
+
+All expensive work happens in one tracked, deadline-bound, resumable run:
+
+```
+preflight -> migrate -> sync -> extract (capped) -> [cards] -> projects -> versions
+-> resolve-entities -> changes -> conflicts -> stale -> similarity -> [career]
+-> state -> [eval] -> digest/weekly report -> finalize
+```
+
+```bash
+python -m career_history.cli weekly --dry-run                 # backlog, deadline, models
+python -m career_history.cli weekly --kind manual --deadline +12h --max-docs 300
+bash scripts/weekly.sh --manual                                # same, with lock + caffeinate + log
+bash launchd/install.sh                                        # Sat 01:00 weekly + Sun-Thu catch-up + reranker
+```
+
+- **Caps.** `--max-docs` (default 1200 ≈ 28 h at ~85 s/file) and `--deadline`
+  (default `Mon 05:00`) bound extraction; the run is resumable because state is
+  per file in `document_extraction_state`. Order is `extraction.priority_folders`
+  first, then most-recently-modified first, so this week's files always go
+  before the historic backlog.
+- **Never a surprise full re-extract.** An extractor-version bump does not
+  re-select files; opt in with `extract-documents --upgrade`.
+- **Catch-up.** `weekly.sh --catchup` (launchd Sun–Thu 23:00) exits immediately
+  unless the last run was partial/failed and there is backlog.
+- **Interactive hours.** LLM stages refuse to start Mon–Fri 07:00–23:00
+  (`--force-hours` overrides). Weekdays are retrieval only; an optional
+  `com.era.weekday-sync` job does a light convert+embed at 02:00.
+- **Tracking.** Every run is a row in `pipeline_runs` (stage, counts, heartbeat,
+  errors, digest id); `era_mcp` serves it at `GET /pipeline/status`
+  (`pipeline_status` tool) with the live backlog and a stale flag.
+- **Provenance.** Facts carry the `run_id` that produced them; stale flags keep
+  their first `flagged_at`; digests carry `kind` + `run_id`.
+- Files under `paths.ignore_subtrees` (default `Z. AI_Notebook/Weekly`) are
+  never ingested, so the pipeline's own reports do not feed back into the index.
+
 ## Layer 2: project intelligence
 
 Builds projects, versions, typed-fact state, changes, conflicts, similarity and
