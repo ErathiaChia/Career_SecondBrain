@@ -225,11 +225,15 @@ def upsert_file(
     is_audio: bool,
     mod_time: datetime,
 ) -> tuple[int, bool]:
+    """Register a file; returns (file_id, needs_processing). Appends an
+    added/modified/restored vault event whenever the file needs processing."""
+    from career_history.intel_db import insert_event
+
     with conn() as c:
         existing = c.execute(text(
-            "SELECT id, file_hash FROM file_registry WHERE file_path = :p"
+            "SELECT id, file_hash, deleted_at FROM file_registry WHERE file_path = :p"
         ), {"p": file_path}).fetchone()
-        if existing and existing[1] == file_hash:
+        if existing and existing[1] == file_hash and existing[2] is None:
             return existing[0], False
         row = c.execute(text("""
             INSERT INTO file_registry
@@ -242,24 +246,61 @@ def upsert_file(
                 folder = EXCLUDED.folder,
                 is_audio = EXCLUDED.is_audio,
                 last_modified_at = EXCLUDED.last_modified_at,
-                last_processed_at = NOW()
+                last_processed_at = NOW(),
+                deleted_at = NULL
             RETURNING id
         """), {
             "path": file_path, "name": file_name, "type": file_type,
             "hash": file_hash, "folder": folder, "is_audio": is_audio,
             "mod": mod_time,
         }).fetchone()
+        if existing is None:
+            kind = "added"
+        elif existing[2] is not None:
+            kind = "restored"
+        else:
+            kind = "modified"
+        insert_event(c, kind, file_path, file_id=row[0],
+                     old_hash=existing[1] if existing else None, new_hash=file_hash,
+                     payload={"file_name": file_name, "folder": folder})
         return row[0], True
 
 
 def delete_file(file_path: str) -> None:
+    """Soft-delete: keep the registry row (deleted_at) and cached conversion so
+    history and version diffs survive, but drop chunks so the file leaves
+    retrieval. The removed facts are snapshotted into the 'deleted' event."""
+    from career_history.intel_db import insert_event
+
     with conn() as c:
-        c.execute(text("DELETE FROM file_registry WHERE file_path = :p"), {"p": file_path})
+        row = c.execute(text("""
+            SELECT fr.id, fr.file_hash, fr.file_name, fr.folder,
+                   (SELECT project_id FROM project_files WHERE file_id = fr.id LIMIT 1) AS project_id
+              FROM file_registry fr
+             WHERE fr.file_path = :p AND fr.deleted_at IS NULL
+        """), {"p": file_path}).fetchone()
+        if row is None:
+            return
+        file_id = row[0]
+        facts = [dict(r._mapping) for r in c.execute(text("""
+            SELECT id, kind, statement FROM knowledge_facts WHERE file_id = :f
+             ORDER BY id LIMIT 200
+        """), {"f": file_id}).fetchall()]
+        for table in ("knowledge_facts", "relationship_evidence", "entity_mentions",
+                      "document_chunks", "parent_chunks", "document_sections", "documents",
+                      "speaker_segments", "processing_queue"):
+            c.execute(text(f"DELETE FROM {table} WHERE file_id = :f"), {"f": file_id})
+        c.execute(text("UPDATE file_registry SET deleted_at = NOW() WHERE id = :f"), {"f": file_id})
+        insert_event(c, "deleted", file_path, file_id=file_id, old_hash=row[1],
+                     payload={"file_name": row[2], "folder": row[3],
+                              "project_id": row[4], "facts": facts})
 
 
 def all_registered_paths() -> list[str]:
     with conn() as c:
-        return [r[0] for r in c.execute(text("SELECT file_path FROM file_registry")).fetchall()]
+        return [r[0] for r in c.execute(text(
+            "SELECT file_path FROM file_registry WHERE deleted_at IS NULL"
+        )).fetchall()]
 
 
 def enqueue(file_id: int) -> None:
@@ -406,7 +447,8 @@ def reindex_documents_v2(
 
 def _v2_reindex_candidates(folder: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
     params: dict[str, Any] = {}
-    where = ["fr.is_audio = false", "(pq.status IS NULL OR pq.status IN ('done', 'failed', 'pending'))"]
+    where = ["fr.is_audio = false", "fr.deleted_at IS NULL",
+             "(pq.status IS NULL OR pq.status IN ('done', 'failed', 'pending'))"]
     where.append("""
         (
             d.file_id IS NULL
@@ -493,6 +535,7 @@ def _document_reindex_candidates(
     params: dict[str, Any] = {}
     where = [
         "fr.is_audio = false",
+        "fr.deleted_at IS NULL",
         "(pq.status IS NULL OR pq.status IN ('done', 'failed', 'pending'))",
     ]
     if folder:
@@ -563,6 +606,7 @@ def _audio_reindex_candidates(
     params: dict[str, Any] = {}
     where = [
         "fr.is_audio = true",
+        "fr.deleted_at IS NULL",
         "(pq.status IS NULL OR pq.status IN ('done', 'failed', 'pending'))",
     ]
     if folder:
@@ -887,16 +931,16 @@ def documents_for_extraction(
     )
     sql = f"""
         WITH docs AS (
-            SELECT fr.id AS file_id, fr.file_name, fr.folder,
+            SELECT fr.id AS file_id, fr.file_name, fr.folder, fr.file_type,
                    min(dc.id) AS rep_chunk_id,
                    left(string_agg(dc.content, ' ' ORDER BY dc.chunk_index), :max_chars) AS content,
                    md5(string_agg(coalesce(dc.content, ''), '' ORDER BY dc.chunk_index)) AS content_hash
               FROM document_chunks dc
               JOIN file_registry fr ON fr.id = dc.file_id
              WHERE {" AND ".join(doc_where)}
-             GROUP BY fr.id, fr.file_name, fr.folder
+             GROUP BY fr.id, fr.file_name, fr.folder, fr.file_type
         )
-        SELECT d.file_id, d.file_name, d.folder, d.rep_chunk_id, d.content, d.content_hash
+        SELECT d.file_id, d.file_name, d.folder, d.file_type, d.rep_chunk_id, d.content, d.content_hash
           FROM docs d
           LEFT JOIN graph_extraction_state ges ON ges.chunk_id = d.rep_chunk_id
          {state_where}
@@ -943,6 +987,18 @@ def mark_graph_chunk_extracted(
         })
 
 
+_ENTITY_MERGES_PRESENT: bool | None = None
+
+
+def _has_entity_merges(c) -> bool:
+    global _ENTITY_MERGES_PRESENT
+    if not _ENTITY_MERGES_PRESENT:
+        _ENTITY_MERGES_PRESENT = c.execute(
+            text("SELECT to_regclass('public.entity_merges')")
+        ).scalar() is not None
+    return _ENTITY_MERGES_PRESENT
+
+
 def upsert_entity(
     canonical_name: str,
     entity_type: str,
@@ -950,6 +1006,17 @@ def upsert_entity(
     metadata: dict[str, Any] | None = None,
 ) -> int:
     with conn() as c:
+        if _has_entity_merges(c):
+            merged = c.execute(text("""
+                SELECT m.into_entity_id
+                  FROM entity_merges m
+                  JOIN entities e ON e.id = m.into_entity_id
+                 WHERE lower(m.merged_name) = lower(:n) AND m.merged_type = :t
+                 ORDER BY m.merged_at DESC
+                 LIMIT 1
+            """), {"n": canonical_name, "t": entity_type}).fetchone()
+            if merged:
+                return merged[0]
         row = c.execute(text("""
             INSERT INTO entities
                 (canonical_name, entity_type, aliases, metadata, updated_at)
@@ -1068,10 +1135,10 @@ def insert_relationship_evidence(
 
 def files_for_seeding(folder: str | None = None) -> list[dict[str, Any]]:
     """All registered files (id + path) for deterministic entity seeding."""
-    sql = "SELECT id AS file_id, file_path FROM file_registry"
+    sql = "SELECT id AS file_id, file_path FROM file_registry WHERE deleted_at IS NULL"
     params: dict[str, Any] = {}
     if folder:
-        sql += " WHERE folder = :folder"
+        sql += " AND folder = :folder"
         params["folder"] = folder
     with conn() as c:
         return [dict(r._mapping) for r in c.execute(text(sql), params).fetchall()]
@@ -1100,22 +1167,37 @@ def insert_fact(
     occurred_at: str | None = None,
     source_quote: str | None = None,
     confidence: float | None = None,
-    extractor_version: str = "entity-rel-facts-v2",
+    extractor_version: str = "entity-rel-facts-v3",
+    topic: str | None = None,
+    status: str | None = None,
+    priority: str | None = None,
+    owner_entity_id: int | None = None,
+    supersedes_fact_id: int | None = None,
 ) -> int:
-    """Insert one structured fact (decision/commitment/event). Facts are cleared
-    per-chunk before re-extraction (see clear_chunk_graph_data), so no upsert."""
+    """Insert one structured fact. Facts are cleared per-chunk before
+    re-extraction (see clear_chunk_graph_data), so no upsert. last_verified_at is
+    when the source last asserted the fact: occurred_at, else the file's mtime."""
     with conn() as c:
         row = c.execute(text("""
             INSERT INTO knowledge_facts
                 (kind, statement, subject_entity_id, object_entity_id, project_entity_id,
                  attributes, occurred_at, file_id, chunk_id, source_quote, confidence,
-                 extractor_version)
+                 extractor_version, topic, status, priority, owner_entity_id,
+                 supersedes_fact_id, last_verified_at)
             VALUES
                 (:kind, :statement, :subject_entity_id, :object_entity_id, :project_entity_id,
                  CAST(:attributes AS jsonb), CAST(:occurred_at AS timestamp), :file_id, :chunk_id,
-                 :source_quote, :confidence, :extractor_version)
+                 :source_quote, :confidence, :extractor_version, :topic, :status, :priority,
+                 :owner_entity_id, :supersedes_fact_id,
+                 COALESCE(CAST(:occurred_at AS timestamp),
+                          (SELECT last_modified_at FROM file_registry WHERE id = :file_id), NOW()))
             RETURNING id
         """), {
+            "topic": topic,
+            "status": status,
+            "priority": priority,
+            "owner_entity_id": owner_entity_id,
+            "supersedes_fact_id": supersedes_fact_id,
             "kind": kind,
             "statement": statement,
             "subject_entity_id": subject_entity_id,

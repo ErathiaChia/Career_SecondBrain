@@ -20,7 +20,9 @@ def database_url() -> str:
     name = os.environ.get("ERA_VAULT_DB_NAME", "era_vault")
     user = os.environ.get("ERA_VAULT_DB_USER", "era")
     password = _require("ERA_VAULT_DB_PASSWORD")
-    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    # Explicit driver: SQLAlchemy 2.1+ maps bare postgresql:// to psycopg (v3),
+    # but requirements.txt ships psycopg2-binary.
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
 
 def ollama_base_url() -> str:
@@ -70,6 +72,23 @@ def candidate_pool() -> int:
     return int(os.environ.get("CANDIDATE_POOL", "50"))
 
 
+def per_file_candidate_cap() -> int:
+    """Max chunks one file may contribute to each retrieval channel's candidate
+    pool. Stops a giant spreadsheet from crowding out every other document."""
+    return int(os.environ.get("PER_FILE_CANDIDATE_CAP", "3"))
+
+
+def vector_exact_search() -> bool:
+    """Exact (sequential) cosine search instead of the approximate HNSW index.
+    Set VECTOR_EXACT_SEARCH=0 once the index is rebuilt and recall is verified."""
+    return _flag("VECTOR_EXACT_SEARCH", True)
+
+
+def candidate_overfetch() -> int:
+    """Each channel fetches candidate_pool * this before the per-file cap trims it."""
+    return int(os.environ.get("CANDIDATE_OVERFETCH", "20"))
+
+
 def default_top_k() -> int:
     """Default number of results returned by /search when the caller
     does not specify top_k."""
@@ -97,6 +116,12 @@ def filename_search_enabled() -> bool:
     them out. Disable with FILENAME_SEARCH_ENABLED=0 (e.g. if it costs too much on
     a very large corpus)."""
     return _flag("FILENAME_SEARCH_ENABLED", True)
+
+
+def short_query_terms() -> int:
+    """Queries with at most this many content words (acronyms, customer names)
+    weight the lexical channel equal to the vector channel in RRF."""
+    return int(os.environ.get("SHORT_QUERY_TERMS", "2"))
 
 
 def lexical_path_weight() -> float:
@@ -131,6 +156,23 @@ def llm_primary_model() -> str:
 
 def llm_primary_timeout() -> float:
     return float(os.environ.get("LLM_PRIMARY_TIMEOUT", "30"))
+
+
+def llm_think() -> bool:
+    """Ollama ``think`` flag. Off by default: rewrite/rerank/synthesis need direct
+    answers, and reasoning tokens eat the num_predict budget."""
+    return _flag("LLM_THINK", False)
+
+
+def llm_num_ctx() -> int:
+    """Ollama context window. The default (often 4k) silently truncates the
+    llm_score rerank batch and multi-document synthesis prompts."""
+    return int(os.environ.get("LLM_NUM_CTX", "16384"))
+
+
+def llm_keep_alive() -> str:
+    """How long Ollama keeps the model loaded after a call (avoids cold reloads)."""
+    return os.environ.get("LLM_KEEP_ALIVE", "30m")
 
 
 def llm_fallback_enabled() -> bool:

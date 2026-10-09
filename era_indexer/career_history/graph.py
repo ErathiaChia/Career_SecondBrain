@@ -21,35 +21,62 @@ console = Console()
 # Bumped to v2 when facts (decisions/commitments/events) joined the same pass.
 # A version change makes graph_chunks_for_extraction treat all chunks as needing
 # (re)extraction, so the first v2 run produces entities + relationships + facts.
-EXTRACTOR_VERSION = "entity-rel-facts-v2"
+# v3: typed project facts (requirement/risk/action_item/...) with topic, status,
+# priority, owner and supersedes.
+EXTRACTOR_VERSION = "entity-rel-facts-v3"
 MAX_CHUNK_CHARS = 4500
 
 # Document-level extraction (one LLM call per FILE instead of per chunk) — the
 # scalable path for large vaults (~1 call/file vs tens of thousands of chunks).
 # Uses its own version so its per-file state in graph_extraction_state never
 # collides with chunk-level runs.
-DOC_EXTRACTOR_VERSION = "doc-entity-facts-v1"
+DOC_EXTRACTOR_VERSION = "doc-entity-facts-v2"
 MAX_DOC_CHARS = 12000
+# Long files are split into MAX_DOC_CHARS windows (one call each) instead of being
+# truncated to their first window. Capped so one giant file cannot stall a run.
+MAX_DOC_WINDOWS = 6
 
 ENTITY_TYPES = {
     "person", "team", "company", "project", "technology", "product",
     "meeting", "concept", "process", "role", "topic", "document",
-    "organization",
+    "organization", "client", "vendor", "deliverable",
 }
 
 RELATIONSHIP_TYPES = {
     "OWNS", "USES", "DEPENDS_ON", "MANAGES", "ATTENDED", "MENTIONED_IN",
     "RELATED_TO", "DISCUSSED_IN", "REFERENCES", "COMMITTED_TO", "DECIDED",
+    "HAS_REQUIREMENT", "ADDRESSED_BY", "BLOCKS", "SUPERSEDES", "DELIVERS", "CLIENT_OF",
 }
 
 # Structured facts extracted in the SAME pass as entities/relationships.
-FACT_KINDS = {"decision", "commitment", "event"}
+FACT_KINDS = {
+    "decision", "commitment", "event",
+    "requirement", "risk", "action_item", "open_question", "dependency", "milestone",
+}
+FACT_STATUSES = {
+    "open", "in_progress", "done", "blocked", "cancelled",
+    "proposed", "approved", "rejected", "mitigated",
+}
+_STATUS_ALIASES = {
+    "pending": "open", "todo": "open", "to do": "open", "new": "open", "wip": "in_progress",
+    "ongoing": "in_progress", "in progress": "in_progress", "complete": "done",
+    "completed": "done", "closed": "done", "resolved": "done", "accepted": "approved",
+    "agreed": "approved", "draft": "proposed", "on hold": "blocked",
+}
+_PRIORITY_ALIASES = {
+    "critical": "high", "urgent": "high", "high": "high", "h": "high", "p1": "high",
+    "medium": "medium", "med": "medium", "m": "medium", "moderate": "medium", "p2": "medium",
+    "low": "low", "l": "low", "minor": "low", "p3": "low",
+}
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 NODE_COLORS = {
     "person": "#f97316",
     "company": "#2563eb",
     "organization": "#2563eb",
+    "client": "#1d4ed8",
+    "vendor": "#3b82f6",
+    "deliverable": "#15803d",
     "project": "#16a34a",
     "technology": "#7c3aed",
     "product": "#9333ea",
@@ -135,24 +162,26 @@ def refresh_documents(
     large vaults — ~one call per file vs tens of thousands. Entities/relationships/
     facts are persisted against the file's representative (first) chunk; the run is
     incremental + folder-scoped via graph_extraction_state (DOC_EXTRACTOR_VERSION)."""
+    window_chars, max_windows = _doc_window_settings()
     docs = db.documents_for_extraction(
         folder=folder, limit=limit,
-        extractor_version=DOC_EXTRACTOR_VERSION, force=force, max_chars=MAX_DOC_CHARS,
+        extractor_version=DOC_EXTRACTOR_VERSION, force=force,
+        max_chars=window_chars * max_windows,
     )
+    track_changes = _change_tracking_enabled()
     processed = failed = entity_count = relationship_count = fact_count = 0
     for doc in docs:
         try:
+            extracted = extract_document(doc, window_chars=window_chars, max_windows=max_windows)
+            old_facts = _file_facts(doc["file_id"]) if track_changes else []
             db.clear_chunk_graph_data(doc["rep_chunk_id"])
-            extracted = extract_chunk(
-                {"content": doc["content"], "file_name": doc["file_name"],
-                 "folder": doc["folder"], "section_path": None, "metadata": {}},
-                max_chars=MAX_DOC_CHARS,
-            )
             ctx = {"file_id": doc["file_id"], "chunk_id": doc["rep_chunk_id"], "section_id": None}
             ids_by_key = _persist_entities(ctx, extracted.get("entities", []))
             entity_count += len(ids_by_key)
             relationship_count += _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
             fact_count += _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
+            if track_changes and old_facts:
+                _record_fact_diff(doc["file_id"], old_facts)
             db.mark_graph_chunk_extracted(doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION)
             processed += 1
         except Exception as e:
@@ -173,6 +202,30 @@ def refresh_documents(
         "facts_seen": fact_count,
         "snapshot": snapshot,
     }
+
+
+def _change_tracking_enabled() -> bool:
+    try:
+        from career_history import intel_db
+        return intel_db.table_exists("project_changes")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _file_facts(file_id: int) -> list[dict[str, Any]]:
+    from career_history import intel_db
+    try:
+        return intel_db.facts_for_file(file_id)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _record_fact_diff(file_id: int, old_facts: list[dict[str, Any]]) -> None:
+    from career_history import changes
+    try:
+        changes.record_fact_diff(file_id, old_facts, _file_facts(file_id), EXTRACTOR_VERSION)
+    except Exception as e:  # noqa: BLE001
+        console.log(f"[yellow]Fact diff skipped for file {file_id}:[/yellow] {e}")
 
 
 def build_and_save_snapshot(folder: str | None = None) -> dict[str, Any]:
@@ -206,6 +259,108 @@ def extract_chunk(
     }
     parsed = _extract_with_ollama(text, context, include_relationships)
     return _normalize_extraction(parsed)
+
+
+def _doc_window_settings() -> tuple[int, int]:
+    models = config.get().get("models", {})
+    try:
+        window = int(models.get("graph_doc_window_chars") or MAX_DOC_CHARS)
+        windows = int(models.get("graph_doc_max_windows") or MAX_DOC_WINDOWS)
+    except (TypeError, ValueError):
+        return MAX_DOC_CHARS, MAX_DOC_WINDOWS
+    return max(2000, window), max(1, windows)
+
+
+def split_windows(text: str, window_chars: int, max_windows: int) -> list[str]:
+    """Split ``text`` into at most ``max_windows`` pieces of ~``window_chars``,
+    breaking on a paragraph/sentence boundary near the end of each window."""
+    text = text or ""
+    out: list[str] = []
+    pos = 0
+    while pos < len(text) and len(out) < max_windows:
+        end = min(len(text), pos + window_chars)
+        if end < len(text):
+            floor = pos + window_chars // 2
+            cut = max(text.rfind("\n\n", floor, end), text.rfind(". ", floor, end))
+            if cut > pos:
+                end = cut + 1
+        piece = text[pos:end].strip()
+        if piece:
+            out.append(piece)
+        pos = end
+    return out
+
+
+def merge_extractions(parts: list[dict[str, list[dict[str, Any]]]]) -> dict[str, list[dict[str, Any]]]:
+    """Merge per-window extractions: entities dedup by (name, type) keeping the
+    highest confidence; relationships dedup by (source, type, target); facts dedup
+    by (kind, statement)."""
+    entities: dict[tuple[str, str], dict[str, Any]] = {}
+    relationships: dict[tuple[str, str, str], dict[str, Any]] = {}
+    facts: dict[tuple[str, str], dict[str, Any]] = {}
+    for part in parts:
+        for e in part.get("entities", []):
+            if not isinstance(e, dict):
+                continue
+            key = (_entity_key(str(e.get("name") or "")), _normalize_type(e.get("type")))
+            if not key[0]:
+                continue
+            prev = entities.get(key)
+            if prev is None or (_float(e.get("confidence")) or 0) > (_float(prev.get("confidence")) or 0):
+                if prev is not None:
+                    e = {**e, "aliases": list({*prev.get("aliases", []), *e.get("aliases", [])})}
+                entities[key] = e
+        for r in part.get("relationships", []):
+            if not isinstance(r, dict):
+                continue
+            key = (_entity_key(str(r.get("source") or "")), _normalize_relation(r.get("type")),
+                   _entity_key(str(r.get("target") or "")))
+            relationships.setdefault(key, r)
+        for f in part.get("facts", []):
+            if not isinstance(f, dict):
+                continue
+            key = (str(f.get("kind") or "").lower(), _entity_key(str(f.get("statement") or "")))
+            facts.setdefault(key, f)
+    return {
+        "entities": list(entities.values()),
+        "relationships": list(relationships.values()),
+        "facts": list(facts.values()),
+    }
+
+
+def extract_document(
+    doc: dict[str, Any],
+    window_chars: int = MAX_DOC_CHARS,
+    max_windows: int = MAX_DOC_WINDOWS,
+) -> dict[str, list[dict[str, Any]]]:
+    """Extract a whole file window-by-window and merge. A window that times out is
+    retried once as two halves before giving up, so one slow call no longer fails
+    the whole document."""
+    windows = split_windows(str(doc.get("content") or ""), window_chars, max_windows)
+    base = {"file_name": doc.get("file_name"), "folder": doc.get("folder"),
+            "section_path": None, "metadata": {"file_type": doc.get("file_type")}}
+    parts: list[dict[str, list[dict[str, Any]]]] = []
+    errors: list[str] = []
+    for i, window in enumerate(windows, start=1):
+        chunk = {**base, "content": window,
+                 "section_path": f"window {i}/{len(windows)}" if len(windows) > 1 else None}
+        try:
+            parts.append(extract_chunk(chunk, max_chars=window_chars))
+        except (TimeoutError, RuntimeError) as e:
+            if "timed out" not in str(e).lower() and not isinstance(e, TimeoutError):
+                errors.append(str(e))
+                continue
+            half = max(2000, len(window) // 2)
+            for sub in split_windows(window, half, 2):
+                try:
+                    parts.append(extract_chunk({**chunk, "content": sub}, max_chars=half))
+                except Exception as sub_e:  # noqa: BLE001
+                    errors.append(str(sub_e))
+        except ValueError as e:
+            errors.append(str(e))
+    if not parts and errors:
+        raise RuntimeError("; ".join(errors[:3]))
+    return merge_extractions(parts)
 
 
 def build_snapshot_payload(
@@ -459,36 +614,124 @@ def _persist_facts(
     facts: list[dict[str, Any]],
     ids_by_key: dict[tuple[str, str], int],
 ) -> int:
-    """Persist decision/commitment/event facts, linking subject/object/project to
-    entities extracted in the same chunk. One bad fact never fails the chunk."""
+    """Persist typed facts, linking subject/object/project/owner to entities
+    extracted in the same chunk, and ``supersedes`` to an earlier fact from the
+    same extraction. One bad fact never fails the chunk."""
     count = 0
-    for fact in facts:
-        if not isinstance(fact, dict):
-            continue
-        kind = str(fact.get("kind") or "").strip().lower()
-        statement = _clean_evidence(fact.get("statement"))
-        if kind not in FACT_KINDS or not statement:
-            continue
-        attributes = fact.get("attributes") if isinstance(fact.get("attributes"), dict) else {}
+    ids_by_statement: dict[str, int] = {}
+    for fact in normalize_facts(facts):
+        attributes = fact["attributes"]
+        owner_id = _resolve_fact_entity(fact.get("owner"), "person", ids_by_key)
+        if fact.get("owner") and owner_id is None:
+            attributes = {**attributes, "owner": fact["owner"]}
         try:
-            db.insert_fact(
-                kind=kind,
-                statement=statement,
+            fact_id = db.insert_fact(
+                kind=fact["kind"],
+                statement=fact["statement"],
                 file_id=chunk["file_id"],
                 chunk_id=chunk["chunk_id"],
                 subject_entity_id=_resolve_fact_entity(fact.get("subject"), fact.get("subject_type"), ids_by_key),
                 object_entity_id=_resolve_fact_entity(fact.get("object"), fact.get("object_type"), ids_by_key),
                 project_entity_id=_resolve_fact_entity(fact.get("project"), "project", ids_by_key),
                 attributes=attributes,
-                occurred_at=_clean_ts(fact.get("occurred_at")),
-                source_quote=_clean_evidence(fact.get("quote") or fact.get("evidence") or ""),
-                confidence=_float(fact.get("confidence")) or 0.6,
+                occurred_at=fact["occurred_at"],
+                source_quote=fact["quote"],
+                confidence=fact["confidence"],
                 extractor_version=EXTRACTOR_VERSION,
+                topic=fact["topic"],
+                status=fact["status"],
+                priority=fact["priority"],
+                owner_entity_id=owner_id,
+                supersedes_fact_id=ids_by_statement.get(_entity_key(fact.get("supersedes") or "")),
             )
+            ids_by_statement[_entity_key(fact["statement"])] = fact_id
             count += 1
         except Exception:
             continue
     return count
+
+
+def normalize_facts(facts: list[Any]) -> list[dict[str, Any]]:
+    """Validate and normalise raw LLM facts: known kind, non-empty statement,
+    canonical status/priority, ISO dates, bounded confidence. Facts that name an
+    earlier statement in ``supersedes`` are ordered after it."""
+    out: list[dict[str, Any]] = []
+    for fact in facts or []:
+        if not isinstance(fact, dict):
+            continue
+        kind = re.sub(r"[^a-z]+", "_", str(fact.get("kind") or "").strip().lower()).strip("_")
+        kind = {"action": "action_item", "question": "open_question", "task": "action_item"}.get(kind, kind)
+        statement = _clean_evidence(fact.get("statement"))
+        if kind not in FACT_KINDS or not statement:
+            continue
+        attributes = fact.get("attributes") if isinstance(fact.get("attributes"), dict) else {}
+        status = normalize_status(fact.get("status") or attributes.get("status"))
+        if status is None and kind in {"action_item", "open_question", "risk", "commitment"}:
+            status = "open"
+        confidence = _float(fact.get("confidence")) or 0.6
+        out.append({
+            **fact,
+            "kind": kind,
+            "statement": statement,
+            "attributes": attributes,
+            "topic": (_clean_name(fact.get("topic")).lower()[:80] or None),
+            "status": status,
+            "priority": normalize_priority(fact.get("priority") or fact.get("severity")
+                                           or attributes.get("priority") or attributes.get("severity")),
+            "owner": _clean_name(fact.get("owner") or attributes.get("owner")) or None,
+            "occurred_at": _clean_ts(fact.get("occurred_at") or attributes.get("due_at")
+                                     if kind == "milestone" else fact.get("occurred_at")),
+            "quote": _clean_evidence(fact.get("quote") or fact.get("evidence") or ""),
+            "confidence": max(0.0, min(1.0, confidence)),
+            "supersedes": _clean_evidence(fact.get("supersedes")) or None,
+        })
+    statements = {_entity_key(f["statement"]) for f in out}
+    out.sort(key=lambda f: 1 if f["supersedes"] and _entity_key(f["supersedes"]) in statements else 0)
+    return out
+
+
+def normalize_status(value: Any) -> str | None:
+    raw = re.sub(r"[_\-]+", " ", str(value or "").strip().lower())
+    if not raw:
+        return None
+    if raw.replace(" ", "_") in FACT_STATUSES:
+        return raw.replace(" ", "_")
+    return _STATUS_ALIASES.get(raw)
+
+
+def normalize_priority(value: Any) -> str | None:
+    return _PRIORITY_ALIASES.get(str(value or "").strip().lower())
+
+
+_MEETING_RE = re.compile(r"meeting|minutes|\bmom\b|notes|standup|stand-up|sync|call|workshop|retro", re.I)
+_CONTRACT_RE = re.compile(r"proposal|\bsow\b|statement of work|\brfp\b|\brfq\b|tender|contract|quotation|\bbrd\b|\bprd\b|requirement|spec", re.I)
+_RAID_RE = re.compile(r"raid|risk|issue|action|tracker|log|register|plan|schedule|timeline", re.I)
+
+
+def doc_type_hint(file_type: Any, file_name: Any) -> str:
+    """One extraction hint keyed off the file type and name, so a slide deck, a
+    RAID log and meeting minutes each get asked for the facts they actually hold."""
+    ft = str(file_type or "").lower().lstrip(".")
+    name = str(file_name or "")
+    if ft in {"mp3", "m4a", "wav", "aac", "flac", "ogg", "mp4", "mov"} or _MEETING_RE.search(name):
+        return ("Meeting record: extract decisions (with alternatives and rationale), action items "
+                "with owner and due date, open questions, risks raised and commitments.")
+    if ft in {"xlsx", "xls", "csv", "numbers"}:
+        if _RAID_RE.search(name):
+            return ("Tracker / RAID log: each row is usually one risk, issue, action item, dependency or "
+                    "milestone. Map columns such as Owner, Status, Due, Priority/Severity, Mitigation.")
+        return ("Spreadsheet: rows may be requirements, estimates, milestones or a plan; map Owner, "
+                "Status, Due and Priority columns when present.")
+    if ft in {"pptx", "ppt", "key"}:
+        return ("Slide deck: slide titles are topics. Extract objectives, scope, requirements, "
+                "milestones, proposed decisions, risks and dependencies.")
+    if name.lower().startswith("readme") or ft in {"py", "js", "ts", "yaml", "yml", "json"}:
+        return "Technical README / config: extract technologies, components, dependencies and requirements."
+    if _CONTRACT_RE.search(name):
+        return ("Proposal / contract / requirements document: extract requirements, deliverables, "
+                "milestones, commitments, assumptions (as dependencies) and risks.")
+    return ("Document: extract decisions, requirements, risks, action items, open questions, "
+            "dependencies and milestones that the text states explicitly.")
 
 
 def _resolve_fact_entity(
@@ -553,7 +796,7 @@ def _extract_with_ollama(
         "prompt": _prompt(text, context, include_relationships),
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0},
+        **ollama_json_options(),
     }
     req = urllib.request.Request(
         f"{base_url}/api/generate",
@@ -569,29 +812,64 @@ def _extract_with_ollama(
     return _loads_json_object(body.get("response") or "{}")
 
 
+def ollama_json_options() -> dict[str, Any]:
+    """Shared Ollama settings for JSON extraction calls. Thinking models (gemma4,
+    qwen3.5) otherwise reason until the read timeout (a 12k-char window timed out
+    after 30 min); the default context can silently truncate a window; and an
+    uncapped num_predict lets a model loop instead of closing the JSON."""
+    models = config.get().get("models", {})
+    return {
+        "think": bool(models.get("graph_extraction_think", False)),
+        "keep_alive": models.get("graph_keep_alive", "30m"),
+        "options": {
+            "temperature": 0,
+            "num_ctx": int(models.get("graph_num_ctx", 16384)),
+            "num_predict": int(models.get("graph_num_predict", 4096)),
+        },
+    }
+
+
 def _prompt(text: str, context: dict[str, Any], include_relationships: bool) -> str:
     relationship_instruction = (
         "Extract relationships only when the chunk explicitly supports them."
         if include_relationships else "Return an empty relationships array."
     )
+    meta = context.get("metadata") or {}
+    hint = doc_type_hint(meta.get("file_type"), context.get("file_name"))
+    entity_types = "|".join(sorted(ENTITY_TYPES - {"document"}))
     return f"""
-Extract a compact, provenance-ready knowledge graph from this KB chunk.
+Extract a compact, provenance-ready project knowledge graph from this KB chunk.
 
 Allowed entity types: {", ".join(sorted(ENTITY_TYPES - {"document"}))}.
 Allowed relationship types: {", ".join(sorted(RELATIONSHIP_TYPES))}.
-Fact kinds: decision, commitment, event.
+Fact kinds: {", ".join(sorted(FACT_KINDS))}.
+Source hint: {hint}
 
 Rules:
 - Return only valid JSON.
-- Keep entity names canonical and short.
-- Do not invent facts beyond the text.
-- Prefer precise relationship labels from the allowed list.
+- Keep entity names canonical and short. Use "client" for the customer an
+  engagement is for, "vendor" for suppliers/partners, "deliverable" for named outputs.
+- Do not invent facts beyond the text. Every fact needs a short verbatim quote.
 - Every relationship must include a short evidence quote from the chunk.
 - {relationship_instruction}
-- Extract "facts" ONLY for explicit: decisions made, commitments/promises (who
-  owes what to whom, by when), or dated events. Reference entity names that also
-  appear in "entities"; leave subject/object/project empty if unclear. Each fact
-  needs a short verbatim quote. Return an empty array if none are explicit.
+- Fact kinds:
+  decision      = something decided; attributes: alternatives[], rationale, impact, decided_by
+  commitment    = a promise (who owes what to whom, by when); attributes: due_at, direction (owed_by_me|owed_to_me), counterparty
+  event         = something that happened on a date (occurred_at)
+  requirement   = something the solution must do or satisfy; attributes: source, acceptance_criteria
+  risk          = a possible problem; priority = severity; attributes: likelihood, impact, mitigation
+  action_item   = a task; owner = who does it; attributes: due_at
+  open_question = an unresolved question; owner = who must answer
+  dependency    = subject depends on object (team, vendor, system, approval); attributes: dependency_type
+  milestone     = a planned or reached checkpoint; occurred_at = target/actual date
+- topic: 1-4 lowercase words naming what the fact is about (e.g. "data migration",
+  "budget", "go-live"), so facts about the same thing can be compared.
+- status: one of {", ".join(sorted(FACT_STATUSES))}; omit if unstated.
+- priority: high|medium|low when stated or clearly implied (severity for risks).
+- supersedes: the exact statement of an earlier fact in this same output that
+  this fact replaces (e.g. a revised date or reversed decision), else omit.
+- Reference entity names that also appear in "entities"; leave subject/object/
+  project/owner empty if unclear. Return empty arrays when nothing is explicit.
 
 Context:
 {json.dumps(context, ensure_ascii=False)}
@@ -599,13 +877,13 @@ Context:
 JSON schema:
 {{
   "entities": [
-    {{"name": "string", "type": "person|team|project|company|technology|product|meeting|concept|process|organization", "aliases": [], "mention_text": "string", "confidence": 0.0}}
+    {{"name": "string", "type": "{entity_types}", "aliases": [], "mention_text": "string", "confidence": 0.0}}
   ],
   "relationships": [
-    {{"source": "entity name", "source_type": "entity type", "target": "entity name", "target_type": "entity type", "type": "OWNS|USES|DEPENDS_ON|MANAGES|ATTENDED|MENTIONED_IN|RELATED_TO|DISCUSSED_IN|REFERENCES|COMMITTED_TO|DECIDED", "evidence": "short quote", "confidence": 0.0}}
+    {{"source": "entity name", "source_type": "entity type", "target": "entity name", "target_type": "entity type", "type": "{"|".join(sorted(RELATIONSHIP_TYPES))}", "evidence": "short quote", "confidence": 0.0}}
   ],
   "facts": [
-    {{"kind": "decision|commitment|event", "statement": "string", "subject": "entity name", "object": "entity name", "project": "project name", "attributes": {{"due_at": "YYYY-MM-DD or text", "status": "open|pending|done", "direction": "owed_by_me|owed_to_me", "counterparty": "name"}}, "occurred_at": "YYYY-MM-DD", "quote": "short verbatim quote", "confidence": 0.0}}
+    {{"kind": "{"|".join(sorted(FACT_KINDS))}", "statement": "string", "topic": "string", "status": "string", "priority": "high|medium|low", "owner": "person name", "subject": "entity name", "object": "entity name", "project": "project name", "supersedes": "earlier statement", "attributes": {{}}, "occurred_at": "YYYY-MM-DD", "quote": "short verbatim quote", "confidence": 0.0}}
   ]
 }}
 
@@ -622,15 +900,31 @@ def _normalize_extraction(parsed: dict[str, Any]) -> dict[str, list[dict[str, An
     }
 
 
+_BAD_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def repair_json(raw: str) -> str:
+    """Fix the malformations local models commonly emit: invalid backslash
+    escapes (Windows paths, LaTeX) and trailing commas before ``}``/``]``."""
+    fixed = _BAD_ESCAPE_RE.sub(r"\\\\", raw)
+    return _TRAILING_COMMA_RE.sub(r"\1", fixed)
+
+
 def _loads_json_object(raw: str) -> dict[str, Any]:
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end < start:
-            raise
-        value = json.loads(raw[start:end + 1])
+    start = raw.find("{")
+    end = raw.rfind("}")
+    body = raw[start:end + 1] if 0 <= start < end else raw
+    value: Any = None
+    last_error: Exception | None = None
+    for candidate in (raw, body, repair_json(body)):
+        try:
+            value = json.loads(candidate, strict=False)
+            break
+        except json.JSONDecodeError as e:
+            last_error = e
+    else:
+        raise last_error or ValueError("unparseable JSON")
     if not isinstance(value, dict):
         raise ValueError("Ollama response was not a JSON object")
     return value

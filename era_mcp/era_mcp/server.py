@@ -18,13 +18,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from era_mcp import agent, config, llm, query_understanding, rerank, retrieval, structural
+from era_mcp import agent, config, epistemic, llm, query_understanding, rerank, retrieval, structural
+from era_mcp.project_routes import router as project_router
 
 app = FastAPI(
     title="Era Vault",
-    description="Semantic search over your personal knowledge base.",
-    version="0.1.0",
+    description="Semantic search and project intelligence over your personal knowledge base.",
+    version="0.2.0",
 )
+app.include_router(project_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -112,7 +114,10 @@ _SYNTH_SYSTEM = (
     "ONLY the numbered sources to answer. Cite sources inline as [n] immediately "
     "after the claim they support. If the sources do not contain the answer, say "
     "so plainly rather than guessing. Be concise and concrete — prefer names, "
-    "dates, and specifics over generalities."
+    "dates, and specifics over generalities. Start each claim with FACT: (stated "
+    "in a source, cited), INFERENCE: (your reasoning from cited facts), or "
+    "UNKNOWN: (needed but not in the sources). When sources disagree, show both "
+    "with citations instead of picking one."
 )
 
 
@@ -246,6 +251,7 @@ async def ask_vault(req: AskRequest) -> dict:
         "complexity": complexity,
         "effective_top_k": effective_top_k,
         "answer": answer,
+        "epistemic": epistemic.parse(answer) if answer else None,
         "citations": citations,
         "chunks": chunks,
         "graph": graph,
@@ -289,12 +295,15 @@ async def search_communities(
 
 @app.get("/facts/search", operation_id="search_facts")
 async def search_facts(
-    query: str = Query(description="Text in a decision/commitment/event statement or quote."),
-    kind: Optional[str] = Query(default=None, description='Filter by "decision", "commitment", or "event".'),
+    query: str = Query(description="Text in a fact statement or quote."),
+    kind: Optional[str] = Query(default=None, description=(
+        'Filter by kind: "decision", "commitment", "event", "requirement", "risk", '
+        '"action_item", "open_question", "dependency", or "milestone".')),
     limit: int = Query(default=10, ge=1, le=100),
 ) -> dict:
-    """Search structured facts (decisions, commitments, events) extracted from the
-    vault. Use for "what did we decide / commit to / when did X happen" questions."""
+    """Search structured facts extracted from the vault: decisions, commitments,
+    events, requirements, risks, action items, open questions, dependencies and
+    milestones. Use for "what did we decide / what are the risks / when is X due"."""
     return {"results": retrieval.search_facts(query=query, kind=kind, limit=limit)}
 
 

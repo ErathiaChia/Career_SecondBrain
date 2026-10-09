@@ -2,7 +2,8 @@
 
 Walks the source directory, computes hashes, and registers/enqueues files
 whose hash differs from what's in the database. Files that have been deleted
-on disk are removed from the registry (cascading their chunks/segments).
+on disk are soft-deleted (chunks removed, registry row kept). Every change is
+appended to ``vault_events`` for project change detection.
 """
 from __future__ import annotations
 
@@ -121,6 +122,14 @@ def discover(
         seed_entities.seed(folder=folder)
     except Exception as e:  # never let seeding break discovery
         console.log(f"[red]seed-entities failed[/red]: {e}")
+
+    # Keep projects and version chains in step with the folder tree (no LLM).
+    try:
+        from career_history import projects, versions
+        projects.discover_projects()
+        versions.link_versions()
+    except Exception as e:
+        console.log(f"[red]project discovery failed[/red]: {e}")
 
     summary = {
         "discovered": discovered,

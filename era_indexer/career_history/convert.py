@@ -13,6 +13,7 @@ from typing import Any
 from rich.console import Console
 
 from career_history import config
+from career_history.textformats import TEXT_FORMAT_EXTS, convert_text_format
 
 
 console = Console()
@@ -143,6 +144,8 @@ def convert(file_path: str) -> str:
     if ext in _PLAIN_EXTS:
         with open(file_path, encoding="utf-8", errors="replace") as f:
             content = f.read()
+    elif ext in TEXT_FORMAT_EXTS:
+        content = convert_text_format(file_path)
     else:
         result = _get_converter().convert(file_path)
         content = result.document.export_to_markdown()
@@ -172,7 +175,7 @@ def convert_cached(file_id: int, file_path: str, source_hash: str) -> str:
     Plain-text files are cheap, so they bypass the cache.
     """
     ext = os.path.splitext(file_path)[1].lower()
-    if ext in _PLAIN_EXTS:
+    if ext in _PLAIN_EXTS or ext in TEXT_FORMAT_EXTS:
         return convert(file_path)
 
     from career_history import db  # lazy import to avoid an import cycle at module load

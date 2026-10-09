@@ -28,18 +28,20 @@ def _norm(name: str) -> str:
 
 
 def _top_level_counts() -> list[tuple[str, int]]:
-    sql = text("SELECT folder, count(*) FROM file_registry GROUP BY folder ORDER BY folder")
+    sql = text(f"SELECT folder, count(*) FROM file_registry WHERE {retrieval.live_files_filter()} "
+               "GROUP BY folder ORDER BY folder")
     with retrieval._get_engine().connect() as conn:
         return [(r[0], int(r[1])) for r in conn.execute(sql).fetchall()]
 
 
 def _abs_prefix_for_folder(folder: str) -> str | None:
     """Absolute path prefix ending in '/<folder>/' for a top-level folder name."""
-    sql = text("""
+    sql = text(f"""
         SELECT substring(file_path FROM 1
                  FOR position('/' || :f || '/' in file_path) + length(:f) + 1) AS prefix
           FROM file_registry
          WHERE folder = :f AND position('/' || :f || '/' in file_path) > 0
+           AND {retrieval.live_files_filter()}
          LIMIT 1
     """)
     with retrieval._get_engine().connect() as conn:
@@ -65,6 +67,7 @@ def list_subfolders(prefix: str | None, depth: int = 1) -> list[dict[str, Any]]:
             SELECT substr(file_path, :plen + 1) AS rem, last_modified_at
               FROM file_registry
              WHERE starts_with(file_path, :prefix)
+               AND {retrieval.live_files_filter()}
         )
         SELECT array_to_string((string_to_array(rem, '/'))[1:{d}], '/') AS name,
                count(*) AS file_count,

@@ -37,6 +37,10 @@ placement_app = typer.Typer(
     help="Librarian training: learn placement patterns, simulate accuracy, plan inbox moves.",
     pretty_exceptions_show_locals=False,
 )
+manifest_app = typer.Typer(
+    help="Export the neutral Vault Manifest read by the indexer and era_mcp.",
+    pretty_exceptions_show_locals=False,
+)
 console = Console()
 
 
@@ -150,6 +154,10 @@ def run(
         # Librarian training layer stays in sync with each maintenance pass.
         pattern_count = PlacementEngine(database, cfg).refresh_patterns(run_id)
 
+        from .manifest import export_manifest
+
+        manifest = export_manifest(database)
+
         FolderScorer(database).score_run(run_id)
         report_path = ReportWriter(cfg, database).write_report(run_id)
         database.finish_run(
@@ -162,6 +170,7 @@ def run(
                 "full": full,
                 "asset_count": asset_count,
                 "placement_patterns": pattern_count,
+                "manifest": manifest,
             },
         )
         console.print(f"Maintenance run {run_id} complete.")
@@ -310,6 +319,23 @@ def assets_refresh(config: str = typer.Option("config.yaml", help="Path to audit
         raise typer.Exit(1)
     count = AssetRegistryBuilder(database).refresh(run_id)
     console.print(f"Asset registry refreshed: {count} asset(s).")
+
+
+@manifest_app.command("export")
+def manifest_export(
+    min_reuse_score: int = typer.Option(1, help="Only export assets with reuse_score >= this value."),
+    config: str = typer.Option("config.yaml", help="Path to auditor config YAML."),
+) -> None:
+    """Write the neutral vault_manifest + vault_reusable_assets tables that the
+    indexer and era_mcp read for project discovery and reuse suggestions."""
+    from .manifest import export_manifest
+
+    _, database = database_from_config(config)
+    result = export_manifest(database, min_reuse_score=min_reuse_score)
+    console.print(
+        f"Manifest v{result['manifest_version']}: {result['manifest_rows']} folder row(s), "
+        f"{result['reusable_assets']} reusable asset(s)."
+    )
 
 
 @assets_app.command("list")
@@ -498,6 +524,7 @@ app.add_typer(report_app, name="report")
 app.add_typer(registry_app, name="registry")
 app.add_typer(assets_app, name="assets")
 app.add_typer(placement_app, name="placement")
+app.add_typer(manifest_app, name="manifest")
 
 
 if __name__ == "__main__":

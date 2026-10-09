@@ -1,0 +1,63 @@
+{
+  "_comment": "Copy to scorecard_project.json and replace with checks you know the answer to. 'project' is anything /projects/{project} resolves (id, key, name, alias). Text matching is case-insensitive substring; a list inside 'expect' means all fragments must appear in the same item. Run: python -m tools.scorecard --suite project",
+  "base_url": "http://localhost:8808",
+  "checks": [
+    {
+      "id": "ibf-fields",
+      "type": "project_fields",
+      "project": "IBF",
+      "expect": {"client": "IBF", "status": "ACTIVE"}
+    },
+    {
+      "id": "ibf-entities",
+      "type": "entities",
+      "project": "IBF",
+      "expect": ["Institute of Banking", "REPLACE: a person on the project", "REPLACE: a key technology"]
+    },
+    {
+      "id": "ibf-decisions",
+      "type": "facts",
+      "project": "IBF",
+      "kind": "decision",
+      "expect": ["REPLACE: words from a decision you know was made"]
+    },
+    {
+      "id": "ibf-risks",
+      "type": "facts",
+      "project": "IBF",
+      "kind": "risk",
+      "expect": ["REPLACE: a known risk"]
+    },
+    {
+      "id": "ibf-golive-conflict",
+      "type": "conflicts",
+      "project": "IBF",
+      "expect": [["go-live", "REPLACE: old date"]]
+    },
+    {
+      "id": "ibf-proposal-latest",
+      "type": "latest_version",
+      "project": "IBF",
+      "family_contains": "proposal",
+      "expect_latest_contains": "REPLACE: e.g. v3 or final"
+    },
+    {
+      "id": "ibf-stale",
+      "type": "stale",
+      "project": "IBF",
+      "expect": ["REPLACE: a statement you know is outdated"]
+    },
+    {
+      "id": "ibf-phase",
+      "type": "state",
+      "project": "IBF",
+      "field": "phase",
+      "expect_contains": "REPLACE: e.g. proposal or build"
+    },
+    {
+      "id": "ibf-brief-attribution",
+      "type": "attribution",
+      "project": "IBF"
+    }
+  ]
+}

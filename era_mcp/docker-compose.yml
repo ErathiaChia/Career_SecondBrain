@@ -27,10 +27,22 @@ services:
       # The heavy LLM runs on the M1 Max (the 6 GB NAS Ollama can't host it).
       # Set 192.168.50.60 to your Mac's LAN IP. Keep the Mac awake (caffeinate)
       # for warm latency; when it's unreachable /ask degrades to reranked chunks.
+      # Mac Tailscale IP (works at home and away). Requires Tailscale on the Mac,
+      # Ollama listening on *:11434, and `tailscale configure-host` on the NAS
+      # (boot-up task) so the NAS and its containers can route to 100.x.
+      # LAN fallback: http://192.168.50.197:11434
       LLM_PRIMARY_BASE_URL: http://100.112.224.47:11434
       LLM_PRIMARY_KIND: ollama            # or "openai_compat" for mlx_lm.server
-      LLM_PRIMARY_MODEL: qwen3.5:9b-mlx
-      LLM_PRIMARY_TIMEOUT: "30"
+      # qwen3.5:35b is MoE (~3B active) -> fast on the M1 Max; one model serves
+      # rewrite, rerank, Judge and synthesis so only one stays loaded.
+      LLM_PRIMARY_MODEL: qwen3.5:35b
+      LLM_JUDGE_MODEL: qwen3.5:35b
+      LLM_PRIMARY_TIMEOUT: "60"
+      LLM_THINK: "0"
+      LLM_NUM_CTX: "16384"
+      LLM_KEEP_ALIVE: 30m
+      QUERY_REWRITE_TIMEOUT: "30"
+      AGENT_TIME_BUDGET: "120"
       LLM_FALLBACK_ENABLED: "1"           # OpenAI fallback (needs OPENAI_API_KEY in ../.env)
       # OPENAI_API_KEY / OPENAI_MODEL are read from ../.env
 
@@ -38,8 +50,9 @@ services:
       # Mac LLM (no extra server). For best quality run Infinity/TEI on the Mac
       # and switch to "infinity" + RERANK_BASE_URL: http://192.168.50.60:7997
       RERANK_ENABLED: "1"
-      RERANK_KIND: infinity
-      RERANK_MODEL: BAAI/bge-reranker-v2-m3
+      RERANK_KIND: llm_score
+      RERANK_TIMEOUT: "60"
+      RERANK_MODEL: BAAI/bge-reranker-v2-m3   # used only when RERANK_KIND=infinity
 
       QUERY_REWRITE_ENABLED: "1"
       HYDE_ENABLED: "0"

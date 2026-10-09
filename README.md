@@ -122,6 +122,17 @@ python -m career_history.cli graph-status
 
 Then open `http://<host>:8808/graph/` in a browser.
 
+**Project intelligence** (Mac, after `python -m career_history.cli migrate`):
+
+```bash
+cd era_auditor && python -m auditor.cli manifest export   # neutral project manifest for the indexer
+cd ../era_indexer && python -m career_history.cli monitor  # projects -> changes -> conflicts -> state -> digest
+```
+
+Then ask the Open WebUI agent things like "brief me on IBF", "what changed this
+week", or "prep me for the HLB meeting with Alice". The `/projects/*` tools are
+listed in [`era_mcp/README.md`](era_mcp/README.md#project-intelligence).
+
 **Run the Knowledge Steward** (Mac):
 
 ```bash

@@ -354,7 +354,12 @@ Notes:
   auto-refresh during `update`/`sync` (all three must be true) and (b) whether
   retrieval *uses* the graph. To populate data you just run the command.
 - **One pass, not three.** Entities, relationships, and facts come from a single
-  LLM call per chunk (`graph.py`, `EXTRACTOR_VERSION = entity-rel-facts-v2`).
+  LLM call per chunk (`graph.py`, `EXTRACTOR_VERSION = entity-rel-facts-v3`).
+  Fact kinds: decision, commitment, event, requirement, risk, action_item,
+  open_question, dependency, milestone, each with topic/status/priority/owner/
+  supersedes. The prompt adds a hint per document type (slide deck, RAID log,
+  meeting notes, proposal, README). Long files are split into
+  `graph_doc_window_chars` windows (up to `graph_doc_max_windows`) and merged.
 - **Incremental.** `graph_extraction_state` tracks per-chunk version+hash, so
   re-runs skip done chunks; `--force` re-extracts.
 - **Cost.** ~15–40s/chunk on the local model — pilot a folder, validate quality,
@@ -363,6 +368,67 @@ Notes:
 - **Read side.** `era_mcp` serves the result via `/entities/*`, `/relationships/search`,
   `/facts/search`, `graph_only`, and `/knowledge/search` — no MCP change needed
   to see entities/relationships; facts get their own endpoints.
+
+## Layer 2: project intelligence
+
+Builds projects, versions, typed-fact state, changes, conflicts, similarity and
+a digest on top of Layer 1. Apply the migrations first (`0006`–`0015`, additive):
+
+```bash
+python -m career_history.cli migrate
+```
+
+Bumping the extractor to v3 makes `extract-documents` re-extract every file once
+(old facts are replaced per file, nothing else is touched).
+
+```bash
+# Projects + version families (both also run automatically inside `discover`).
+# Projects come from the auditor's vault_manifest (`auditor manifest export`,
+# also run by `auditor run`) plus seed.project_roots folders.
+python -m career_history.cli discover-projects
+python -m career_history.cli link-versions
+python -m career_history.cli enrich-projects            # LLM fills low-confidence client/type/owner
+
+# Entity resolution: dry-run first, then apply. --embeddings adds name-vector matching.
+python -m career_history.cli resolve-entities
+python -m career_history.cli resolve-entities --apply
+
+# Checks and state (each has --no-llm for a deterministic-only run)
+python -m career_history.cli detect-changes             # vault events + fact diffs -> project_changes + impact
+python -m career_history.cli detect-conflicts           # contradictions across documents
+python -m career_history.cli detect-stale               # superseded / contradicted / old-version / aged facts
+                                                        # (aged = open items in projects touched within --active-days, default 60)
+python -m career_history.cli project-state              # state + health per project (skips unchanged)
+python -m career_history.cli project-similarity
+
+# Human decisions
+python -m career_history.cli resolve-conflict 12 --status confirmed --latest 345
+python -m career_history.cli proposed-actions            # list; --approve/--reject/--done ID
+
+# Everything in order, plus an attention-thresholded digest
+python -m career_history.cli monitor --threshold 40
+python -m career_history.cli digest                     # rebuild/print the digest only
+```
+
+`scripts/monitor.sh` wraps `monitor` for cron (lock file, `ERA_PYTHON`,
+`ERA_MONITOR_THRESHOLD`, `ERA_MONITOR_ARGS`). Deleted files are now soft-deleted
+(`file_registry.deleted_at`): their chunks and facts are removed, but the
+deletion and a snapshot of its facts are kept in `vault_events` so changes can
+report what was lost.
+
+| Module | Role |
+| --- | --- |
+| `projects.py` | Project discovery, file assignment (longest folder match), per-field confidence |
+| `versions.py` | Version families and latest-file detection |
+| `resolve.py` | Duplicate-entity detection and merging (`entity_merges` log) |
+| `project_state.py` | Deterministic state + health; LLM rollup that may only cite given fact ids |
+| `changes.py` | Event and fact-diff changes; impact cards ("rationale not found" when unstated) |
+| `conflicts.py` | Date/status conflicts, LLM-judged contradictions, stale flags |
+| `similarity.py` | Project vectors + shared-entity overlap |
+| `monitor.py` | Pipeline stages (failure-isolated) and digest scoring |
+| `intel_db.py` | SQL for all of the above |
+
+`era_mcp` serves all of it under `/projects/*`; see its README ("Project intelligence").
 
 ## How "update" works
 

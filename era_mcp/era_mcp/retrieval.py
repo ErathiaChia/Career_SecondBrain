@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import httpx
@@ -11,6 +12,25 @@ from sqlalchemy.engine import Engine
 from era_mcp import config
 
 _engine: Engine | None = None
+
+_STOPWORDS = frozenset("""
+a an and are as at be been but by can could did do does for from had has have how
+i in is it its me my of on or our should so that the their them there these they
+this to us was we were what when where which who whom why will with would you your
+about any all tell give show find get latest recent please
+""".split())
+
+
+def lexical_terms(query: str | None) -> list[str]:
+    """Content words for the lexical channel, OR-ed together (ts_rank rewards
+    chunks matching more of them). AND-ing every word, as websearch_to_tsquery
+    does, made natural questions ("what did we present at SCDS") match nothing.
+    Tokens are [a-z0-9]+ only, so the result is always a safe to_tsquery string."""
+    seen: list[str] = []
+    for tok in re.findall(r"[a-z0-9]+", (query or "").lower()):
+        if tok not in _STOPWORDS and tok not in seen:
+            seen.append(tok)
+    return seen
 
 
 def _get_engine() -> Engine:
@@ -90,14 +110,21 @@ def _fused_candidates(
     """
     vec = _vec_literal(query_embedding)
 
+    lex_terms = lexical_terms(query)
+    w_fts = config.rrf_fts_weight()
+    if 0 < len(lex_terms) <= config.short_query_terms():
+        # Acronyms / names ("SCDS", "IBF"): the embedding has little to go on,
+        # so exact word and filename matches get full weight.
+        w_fts = max(w_fts, config.rrf_vector_weight())
+
     conditions = []
     params: dict[str, Any] = {
         "qvec": vec,
-        "qtext": query or "",
+        "qtext": " | ".join(lex_terms),
         "cand": cand,
         "rrf_k": config.rrf_k(),
         "w_vec": config.rrf_vector_weight(),
-        "w_fts": config.rrf_fts_weight(),
+        "w_fts": w_fts,
         "final_limit": limit,
     }
 
@@ -115,24 +142,27 @@ def _fused_candidates(
     # hit the path a file was filed under even when the body never spells them
     # out. translate() turns '01_IBF' / 'a-b.pdf' separators into spaces so the
     # 'simple' tokenizer emits 'ibf' / 'a' / 'b' / 'pdf'.
+    # The path is matched once per file (path_hits) and joined to chunks: building
+    # the path tsvector per chunk row cost ~9s on ~130k chunks.
     if config.filename_search_enabled():
         _path_tsv = (
             "to_tsvector('simple', translate("
-            "coalesce(fr.file_name,'') || ' ' || coalesce(fr.folder,'') || ' ' "
-            "|| coalesce(fr.file_path,''), '_/.-', '    '))"
+            "coalesce(pf.file_name,'') || ' ' || coalesce(pf.folder,'') || ' ' "
+            "|| coalesce(pf.file_path,''), '_/.-', '    '))"
         )
-        fts_where = (
-            "(dc.search_vector @@ websearch_to_tsquery('simple', :qtext) "
-            f"OR {_path_tsv} @@ websearch_to_tsquery('simple', :qtext))"
+        path_hits_cte = (
+            f"SELECT pf.id AS file_id, ts_rank({_path_tsv}, to_tsquery('simple', :qtext)) AS prank "
+            f"FROM file_registry pf WHERE {_path_tsv} @@ to_tsquery('simple', :qtext)"
         )
-        fts_rank = (
-            "ts_rank(dc.search_vector, websearch_to_tsquery('simple', :qtext)) "
-            f"+ :w_path * ts_rank({_path_tsv}, websearch_to_tsquery('simple', :qtext))"
-        )
+        fts_where = ("(dc.search_vector @@ to_tsquery('simple', :qtext) "
+                     "OR ph.file_id IS NOT NULL)")
+        fts_rank = ("ts_rank(dc.search_vector, to_tsquery('simple', :qtext)) "
+                    "+ :w_path * COALESCE(ph.prank, 0)")
         params["w_path"] = config.lexical_path_weight()
     else:
-        fts_where = "dc.search_vector @@ websearch_to_tsquery('simple', :qtext)"
-        fts_rank = "ts_rank(dc.search_vector, websearch_to_tsquery('simple', :qtext))"
+        path_hits_cte = "SELECT NULL::int AS file_id, 0.0::real AS prank WHERE FALSE"
+        fts_where = "dc.search_vector @@ to_tsquery('simple', :qtext)"
+        fts_rank = "ts_rank(dc.search_vector, to_tsquery('simple', :qtext))"
 
     parent_select = (
         "pc.content AS parent_content, dc.parent_chunk_id AS parent_chunk_id"
@@ -144,27 +174,52 @@ def _fused_candidates(
         if use_parent else ""
     )
 
+    # Per-file cap: a single huge file (thousands of spreadsheet chunks) would
+    # otherwise fill the whole candidate pool. Each channel over-fetches, keeps at
+    # most :per_file chunks per file, then trims to :cand.
+    params["per_file"] = config.per_file_candidate_cap()
+    params["cand_wide"] = cand * config.candidate_overfetch()
+    # "+ 0" stops the planner from using the HNSW index. Its recall collapses on
+    # clusters of near-duplicate spreadsheet chunks (returned 0.54-distance hits
+    # while a 0.23 match existed); an exact scan of ~130k vectors takes ~1s.
+    vec_order = ("(dc.embedding <=> CAST(:qvec AS vector)) + 0" if config.vector_exact_search()
+                 else "dc.embedding <=> CAST(:qvec AS vector)")
+
     sql = text(f"""
-        WITH vec AS (
-            SELECT dc.id AS chunk_pk,
-                   ROW_NUMBER() OVER (
-                       ORDER BY dc.embedding <=> CAST(:qvec AS vector)
-                   ) AS rank,
-                   1 - (dc.embedding <=> CAST(:qvec AS vector)) AS similarity
+        WITH vec_raw AS (
+            SELECT dc.id AS chunk_pk, dc.file_id,
+                   dc.embedding <=> CAST(:qvec AS vector) AS dist
               FROM document_chunks dc
               JOIN file_registry fr ON dc.file_id = fr.id
              WHERE dc.embedding IS NOT NULL AND {where}
-             ORDER BY dc.embedding <=> CAST(:qvec AS vector)
+             ORDER BY {vec_order}
+             LIMIT :cand_wide
+        ),
+        vec AS (
+            SELECT chunk_pk, ROW_NUMBER() OVER (ORDER BY dist) AS rank, 1 - dist AS similarity
+              FROM (SELECT vr.*, ROW_NUMBER() OVER (PARTITION BY vr.file_id ORDER BY vr.dist) AS file_rank
+                      FROM vec_raw vr) capped
+             WHERE file_rank <= :per_file
+             ORDER BY dist
              LIMIT :cand
         ),
-        fts AS (
-            SELECT dc.id AS chunk_pk,
-                   ROW_NUMBER() OVER (ORDER BY ({fts_rank}) DESC) AS rank
+        path_hits AS ({path_hits_cte}),
+        fts_raw AS (
+            SELECT dc.id AS chunk_pk, dc.file_id, ({fts_rank}) AS score
               FROM document_chunks dc
               JOIN file_registry fr ON dc.file_id = fr.id
+              LEFT JOIN path_hits ph ON ph.file_id = dc.file_id
              WHERE ({fts_where})
                AND {where}
              ORDER BY ({fts_rank}) DESC
+             LIMIT :cand_wide
+        ),
+        fts AS (
+            SELECT chunk_pk, ROW_NUMBER() OVER (ORDER BY score DESC) AS rank
+              FROM (SELECT fr2.*, ROW_NUMBER() OVER (PARTITION BY fr2.file_id ORDER BY fr2.score DESC) AS file_rank
+                      FROM fts_raw fr2) capped
+             WHERE file_rank <= :per_file
+             ORDER BY score DESC
              LIMIT :cand
         ),
         fused AS (
@@ -563,9 +618,30 @@ def status_summary(folder: str | None = None) -> dict[str, int]:
     return {row[0]: row[1] for row in rows}
 
 
+_SOFT_DELETE_PRESENT: bool | None = None
+
+
+def live_files_filter(alias: str = "") -> str:
+    """SQL predicate excluding soft-deleted files (migration 0007), or ``TRUE``
+    on older schemas. Chunk-based retrieval needs no filter because a deleted
+    file's chunks are removed; this is for direct ``file_registry`` reads."""
+    global _SOFT_DELETE_PRESENT
+    if _SOFT_DELETE_PRESENT is None:
+        try:
+            with _get_engine().connect() as conn:
+                _SOFT_DELETE_PRESENT = conn.execute(text("""
+                    SELECT 1 FROM information_schema.columns
+                     WHERE table_name = 'file_registry' AND column_name = 'deleted_at'
+                """)).scalar() is not None
+        except Exception:
+            _SOFT_DELETE_PRESENT = False
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}deleted_at IS NULL" if _SOFT_DELETE_PRESENT else "TRUE"
+
+
 def list_folders() -> list[str]:
     """Return all distinct top-level folders in the file registry."""
-    sql = text("SELECT DISTINCT folder FROM file_registry ORDER BY folder")
+    sql = text(f"SELECT DISTINCT folder FROM file_registry WHERE {live_files_filter()} ORDER BY folder")
     engine = _get_engine()
     with engine.connect() as conn:
         rows = conn.execute(sql).fetchall()
@@ -787,6 +863,10 @@ def _facts_table_present(conn: Any) -> bool:
 _FACT_SELECT = """
     SELECT kf.id, kf.kind, kf.statement, kf.attributes, kf.occurred_at,
            kf.source_quote, kf.confidence,
+           to_jsonb(kf) ->> 'topic'            AS topic,
+           to_jsonb(kf) ->> 'status'           AS status,
+           to_jsonb(kf) ->> 'priority'         AS priority,
+           to_jsonb(kf) ->> 'last_verified_at' AS last_verified_at,
            subj.canonical_name AS subject,
            obj.canonical_name  AS object,
            proj.canonical_name AS project,
@@ -800,8 +880,8 @@ _FACT_SELECT = """
 
 
 def search_facts(query: str, kind: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-    """Search structured facts (decision/commitment/event) by statement/quote text
-    and optional kind. Returns [] when knowledge_facts is absent."""
+    """Search structured facts by statement/quote text and optional kind.
+    Returns [] when knowledge_facts is absent."""
     with _get_engine().connect() as conn:
         if not _facts_table_present(conn):
             return []

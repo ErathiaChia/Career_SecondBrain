@@ -73,12 +73,46 @@ def chunk_segments(segments: list[dict]) -> list[dict]:
     return out
 
 
+DEFAULT_BATCH_SIZE = 32
+MIN_CHARS = 500
+RETRY_PAUSE_SECONDS = 2.0
+
+
+def _embed_one(text: str) -> list[float]:
+    """Embed a single chunk, halving it until Ollama accepts it."""
+    while True:
+        try:
+            return _get_embedder().embed_documents([text])[0]
+        except Exception:
+            if len(text) <= MIN_CHARS:
+                raise
+            time.sleep(RETRY_PAUSE_SECONDS)
+            text = text[: len(text) // 2]
+
+
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed a batch; on failure (Ollama's runner can drop very large
+    requests) retry in halves down to single chunks."""
+    try:
+        return _get_embedder().embed_documents(texts)
+    except Exception:
+        if len(texts) == 1:
+            time.sleep(RETRY_PAUSE_SECONDS)
+            return [_embed_one(texts[0])]
+        time.sleep(RETRY_PAUSE_SECONDS)
+        mid = len(texts) // 2
+        return _embed_batch(texts[:mid]) + _embed_batch(texts[mid:])
+
+
 def embed(texts: list[str]) -> list[list[float]]:
-    """Embed a list of strings via Ollama."""
+    """Embed a list of strings via Ollama, in batches."""
     if not texts:
         return []
     t0 = time.time()
-    vectors = _get_embedder().embed_documents(texts)
+    size = int(config.get()["processing"].get("embed_batch_size") or DEFAULT_BATCH_SIZE)
+    vectors: list[list[float]] = []
+    for i in range(0, len(texts), size):
+        vectors.extend(_embed_batch(texts[i:i + size]))
     console.log(
         f"[green]Embedded[/green] {len(texts)} chunks ({time.time() - t0:.1f}s)"
     )

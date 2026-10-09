@@ -362,6 +362,182 @@ def seed_entities_cmd(
     console.print(table)
 
 
+# --- Project intelligence -------------------------------------------------------
+# Imports are local so a missing optional dependency never breaks the core CLI.
+
+
+def _print_result(title: str, result: dict) -> None:
+    table = Table(title=title)
+    table.add_column("Field")
+    table.add_column("Value")
+    for key, value in result.items():
+        if isinstance(value, (list, dict)) and key in {"sample", "items"}:
+            continue
+        table.add_row(key, _jsonish(value) if isinstance(value, dict) else str(value))
+    console.print(table)
+
+
+@app.command("discover-projects")
+def discover_projects_cmd():
+    """Build/refresh the projects table from the auditor manifest (vault_manifest)
+    plus folder-taxonomy seeds, and assign files to projects. Also runs in `discover`."""
+    from career_history import projects
+    _print_result("Projects", projects.discover_projects())
+
+
+@app.command("enrich-projects")
+def enrich_projects_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project id/key/name."),
+    min_confidence: float = typer.Option(0.5, "--min-confidence"),
+):
+    """Fill low-confidence project fields (client, type, owner, objective) with the
+    local LLM, citing facts and file names. Deterministic values are never overwritten."""
+    from career_history import projects
+    _print_result("Project enrichment", projects.enrich_with_llm(project, min_confidence=min_confidence))
+
+
+@app.command("link-versions")
+def link_versions_cmd():
+    """Group documents into version families (v1 -> v2 -> final) and mark the latest."""
+    from career_history import versions
+    _print_result("Document versions", versions.link_versions())
+
+
+@app.command("resolve-entities")
+def resolve_entities_cmd(
+    apply: bool = typer.Option(False, "--apply", help="Merge duplicates (default: dry-run)."),
+    entity_type: Optional[list[str]] = typer.Option(None, "--type", "-t"),
+    embeddings: bool = typer.Option(False, "--embeddings", help="Also merge on name-embedding similarity."),
+    threshold: float = typer.Option(0.93, "--threshold"),
+):
+    """Find duplicate entities ("ST Engg" / "ST Engineering") and fold them into one."""
+    from career_history import resolve
+    result = resolve.resolve_entities(apply=apply, entity_types=entity_type,
+                                      use_embeddings=embeddings, threshold=threshold)
+    _print_result("Entity resolution", result)
+    table = Table(title="Merges" + ("" if apply else " (dry-run)"))
+    for col in ("from", "into", "type", "method", "score"):
+        table.add_column(col)
+    for m in result["sample"]:
+        table.add_row(m["source_name"], m["target_name"], m["entity_type"], m["method"], str(m["score"]))
+    console.print(table)
+
+
+@app.command("project-state")
+def project_state_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p"),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Deterministic fields only."),
+    force: bool = typer.Option(False, "--force", help="Rebuild even if inputs are unchanged."),
+):
+    """Build the current state + health of each project from typed facts."""
+    from career_history import project_state
+    _print_result("Project state", project_state.refresh_states(project, use_llm=not no_llm, force=force))
+
+
+@app.command("detect-changes")
+def detect_changes_cmd(
+    no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM impact notes."),
+):
+    """Turn new vault events and fact diffs into project_changes with impact notes."""
+    from career_history import changes
+    _print_result("Changes", changes.detect_changes(use_llm=not no_llm))
+
+
+@app.command("detect-conflicts")
+def detect_conflicts_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p"),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Deterministic checks only."),
+    max_pairs: int = typer.Option(200, "--max-pairs", help="LLM-judged pairs per project."),
+):
+    """Find contradicting facts (dates, decisions, requirements) within each project."""
+    from career_history import conflicts
+    _print_result("Conflicts", conflicts.detect_conflicts(project, use_llm=not no_llm, max_pairs=max_pairs))
+
+
+@app.command("resolve-conflict")
+def resolve_conflict_cmd(
+    conflict_id: int = typer.Argument(...),
+    status: str = typer.Option(..., "--status", help='"confirmed" or "dismissed".'),
+    latest: Optional[int] = typer.Option(None, "--latest", help="Fact id that is correct now."),
+):
+    """Confirm or dismiss a detected conflict; the decision survives re-detection."""
+    from career_history import intel_db
+    if status not in {"confirmed", "dismissed"}:
+        raise typer.BadParameter('status must be "confirmed" or "dismissed"')
+    ok = intel_db.set_conflict_status(conflict_id, status, latest)
+    console.log(f"[green]Conflict {conflict_id} -> {status}[/green]" if ok else f"[red]No conflict {conflict_id}[/red]")
+
+
+@app.command("detect-stale")
+def detect_stale_cmd(
+    max_age_days: int = typer.Option(365, "--max-age-days"),
+    active_days: int = typer.Option(60, "--active-days",
+                                    help="Projects with no file activity for longer are inactive."),
+):
+    """Flag facts that are superseded, contradicted, from old versions, or too old."""
+    from career_history import conflicts
+    _print_result("Stale knowledge", conflicts.detect_stale(max_age_days=max_age_days,
+                                                             active_days=active_days))
+
+
+@app.command("project-similarity")
+def project_similarity_cmd(
+    top_k: int = typer.Option(5, "--top-k"),
+):
+    """Compute similar projects (content embeddings + shared clients/tech/people)."""
+    from career_history import similarity
+    _print_result("Project similarity", similarity.refresh_similarity(top_k=top_k))
+
+
+@app.command("proposed-actions")
+def proposed_actions_cmd(
+    approve: Optional[int] = typer.Option(None, "--approve", help="Approve this action id."),
+    reject: Optional[int] = typer.Option(None, "--reject", help="Reject this action id."),
+    done: Optional[int] = typer.Option(None, "--done", help="Mark this action id done."),
+    status: str = typer.Option("pending", "--status"),
+):
+    """Review actions the agent proposed via era_mcp. Nothing runs until approved."""
+    from career_history import intel_db
+    for action_id, new_status in ((approve, "approved"), (reject, "rejected"), (done, "done")):
+        if action_id is not None:
+            ok = intel_db.decide_proposed_action(action_id, new_status)
+            console.log(f"[green]Action {action_id} -> {new_status}[/green]" if ok
+                        else f"[red]No action {action_id}[/red]")
+            return
+    table = Table(title=f"Proposed actions ({status})")
+    for col in ("id", "project", "type", "title", "created"):
+        table.add_column(col)
+    for a in intel_db.list_proposed_actions(status):
+        table.add_row(str(a["id"]), a["project"] or "", a["action_type"], a["title"], str(a["created_at"])[:16])
+    console.print(table)
+
+
+@app.command("monitor")
+def monitor_cmd(
+    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
+    skip_sync: bool = typer.Option(False, "--skip-sync"),
+    skip_extract: bool = typer.Option(False, "--skip-extract"),
+    no_llm: bool = typer.Option(False, "--no-llm"),
+    threshold: int = typer.Option(40, "--threshold", help="Minimum attention score for the digest."),
+):
+    """Scheduled pipeline: sync -> extract -> projects/versions -> changes ->
+    conflicts/stale -> state -> similarity -> digest."""
+    from career_history import monitor
+    _print_result("Monitor", monitor.run(folder=folder, skip_sync=skip_sync, skip_extract=skip_extract,
+                                         use_llm=not no_llm, threshold=threshold))
+
+
+@app.command("digest")
+def digest_cmd(
+    threshold: int = typer.Option(40, "--threshold"),
+    since_days: int = typer.Option(7, "--since-days"),
+):
+    """Build an attention-thresholded digest from current state, changes and conflicts."""
+    from career_history import monitor
+    result = monitor.build_digest(threshold=threshold, since_days=since_days)
+    console.print(result["markdown"])
+
+
 def _update(
     folder: Optional[str],
     limit: Optional[int],

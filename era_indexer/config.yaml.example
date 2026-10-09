@@ -29,6 +29,15 @@ models:
   # return empty/garbage under the forced JSON format. Read timeout per extraction
   # call (seconds); document-level calls on a local model can take minutes.
   graph_extraction_timeout: 600
+  # Document-level extraction splits long files into windows of this many chars
+  # (one call each, merged) instead of truncating to the first window.
+  graph_doc_window_chars: 12000
+  graph_doc_max_windows: 6
+  # Thinking must stay off for JSON extraction (thinking models run to the timeout).
+  graph_extraction_think: false
+  graph_num_ctx: 16384
+  graph_num_predict: 4096
+  graph_keep_alive: "30m"
   # Optional: separate model for the Contextual-Retrieval situating blurb.
   # Defaults to graph_extraction_model when unset.
   # contextual_blurb_model: "qwen3.5:9b-mlx"
@@ -141,7 +150,8 @@ seed:
 
 extensions:
   audio:     [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".mov"]
-  documents: [".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt"]
+  # .srt/.vtt: caption transcripts saved next to recordings; .eml: saved emails.
+  documents: [".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt", ".srt", ".vtt", ".eml"]
 
 huggingface:
   # Used only for first-time model downloads from Hugging Face (the MLX Whisper

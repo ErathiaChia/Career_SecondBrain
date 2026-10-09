@@ -89,6 +89,18 @@ projects:
     tags: ["transformation", "accreditation", "presales"]
     last_updated: "2026-06-13"
 
+  - project_id: "2026-IBF-COMPLIANCES-AUDIT-CHECK"
+    customer_code: IBF
+    customer_name: Institute of Banking and Finance
+    initiative_name: Compliances Audit Check
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/01_IBF/7 Compliances Audit Check"
+    tags: ["compliance", "audit"]
+    last_updated: "2026-10-06"
+
   # ---------------------------------------------------------------------
   # Single-initiative customers
   # ---------------------------------------------------------------------
@@ -262,9 +274,9 @@ projects:
     lifecycle: active_presales
     initiative_type: sales_opportunity
     year: 2026
-    folder_path: "01 Project/2026/16_HC3"
+    folder_path: "01 Project/2026/16_TTSH-HC3"
     tags: ["presales"]
-    last_updated: "2026-06-13"
+    last_updated: "2026-10-06"
 
   - project_id: "2026-HSA-ARCHITECTURE"
     customer_code: HSA
@@ -274,9 +286,9 @@ projects:
     lifecycle: lead
     initiative_type: architecture_artifact
     year: 2026
-    folder_path: "01 Project/2026/17_HSA"
+    folder_path: "01 Project/2026/17_HSA_Project"
     tags: ["healthcare", "architecture", "lead"]
-    last_updated: "2026-06-13"
+    last_updated: "2026-10-06"
 
   - project_id: "2026-VANGUARD-HEALTH-AI-PROPOSAL"
     customer_code: VANGUARDHEALTH
@@ -313,3 +325,51 @@ projects:
     folder_path: "01 Project/2026/20_TemasekPoly_SmartContract"
     tags: ["education", "smart-contract", "research"]
     last_updated: "2026-06-13"
+
+  - project_id: "2026-TTSH-NURSE-SCHEDULING"
+    customer_code: TTSH
+    customer_name: Tan Tock Seng Hospital
+    initiative_name: Nurse Scheduling
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/21_TTSH_NurseScheduling"
+    tags: ["healthcare", "scheduling"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-NHIC-REFER-RIGHT"
+    customer_code: NHIC
+    customer_name: National Health Innovation Centre Singapore
+    initiative_name: REFER-RIGHT
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/22_NHIC_Project-REFER-RIGHT"
+    tags: ["healthcare", "referral"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-EDB-RAG-SYSTEM"
+    customer_code: EDB
+    customer_name: Economic Development Board
+    initiative_name: RAG System
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/23_EDB_RAGSystem"
+    tags: ["government", "rag"]
+    last_updated: "2026-10-06"
+
+  - project_id: "2026-IHH-DIGITAL-CONCIERGE"
+    customer_code: IHH
+    customer_name: IHH Healthcare
+    initiative_name: Digital Concierge
+    status: active
+    lifecycle: lead
+    initiative_type: sales_opportunity
+    year: 2026
+    folder_path: "01 Project/2026/24_IHH_DigitalConcierge"
+    tags: ["healthcare", "concierge"]
+    last_updated: "2026-10-06"

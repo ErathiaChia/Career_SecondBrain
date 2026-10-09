@@ -88,3 +88,19 @@ customers:
     full_name: Temasek Polytechnic
     industry: Education
     country: Singapore
+  TTSH:
+    full_name: Tan Tock Seng Hospital
+    industry: Healthcare
+    country: Singapore
+  NHIC:
+    full_name: National Health Innovation Centre Singapore
+    industry: Healthcare
+    country: Singapore
+  EDB:
+    full_name: Economic Development Board
+    industry: Government
+    country: Singapore
+  IHH:
+    full_name: IHH Healthcare
+    industry: Healthcare
+    country: Malaysia

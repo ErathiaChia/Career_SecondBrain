@@ -189,7 +189,8 @@ ssh mac "cd ~/GitHub/Career_SecondBrain/era_indexer && \
 ### Populating the entity + fact substrate (Layer 1)
 
 The `/entities/*`, `/relationships/search`, and `/facts/search` reads serve data
-**built by the indexer**, not by this server (era_mcp stays read-only). Populate
+**built by the indexer**, not by this server (era_mcp stays read-only apart from
+the `proposed_actions` approval queue). Populate
 it on the Mac, then these endpoints light up — no era_mcp change:
 
 ```bash
@@ -393,15 +394,79 @@ http://<host>:8808/openapi.json
 Open WebUI reads the spec and registers each endpoint's `operation_id`
 (`search_vault`, `indexing_status`, …) as a callable tool.
 
+## Project intelligence
+
+A project-centric layer on top of retrieval. The **indexer builds** it (on the
+Mac, where the models run); this server **reads** it. Every endpoint degrades to
+an empty result if its table is missing, so it is safe to deploy before the
+indexer migrations have run.
+
+**What the indexer builds** (migrations `0006`–`0015`, apply with
+`python -m career_history.cli migrate`):
+
+| Table | Built by | What it holds |
+| --- | --- | --- |
+| `projects`, `project_files` | `discover-projects` (also in `discover`) | One row per project from the auditor's `vault_manifest` plus folder seeds; client/type/status/owner with per-field confidence and source |
+| `document_versions` | `link-versions` (also in `discover`) | Version families (v1 → v2 → final) and the latest file |
+| `vault_events` | every sync | File added / modified / deleted / restored, new versions |
+| `knowledge_facts` (typed) | `extract-documents` | decision, commitment, event, requirement, risk, action_item, open_question, dependency, milestone, with topic, status, priority, owner, supersedes, last_verified_at |
+| `entity_merges` | `resolve-entities --apply` | Duplicate entities folded into one |
+| `project_state` | `project-state` | Current state + health, every field with confidence, sources, last_verified |
+| `project_changes` | `detect-changes` + re-extraction | Document, version and fact-level changes with an impact card per batch |
+| `fact_conflicts`, `stale_flags` | `detect-conflicts`, `detect-stale` | Contradictions (needs confirmation) and out-of-date facts |
+| `project_embeddings`, `project_similarity` | `project-similarity` | Similar projects and why |
+| `proposed_actions`, `digests` | this server / `monitor` | Actions awaiting approval; attention-thresholded digests |
+
+`monitor` runs the whole chain (sync → extract → projects/versions → changes →
+conflicts/stale → state → similarity → digest); `scripts/monitor.sh` is a cron
+wrapper.
+
+**Endpoints** (each is an Open WebUI tool via its `operation_id`):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /projects`, `GET /projects/{project}` | List / resolve projects (id, key, name, alias) |
+| `GET /projects/{project}/state` | Current state + health |
+| `GET /projects/{project}/facts?kind=` | Typed facts, with latest-version, stale and conflict markers |
+| `GET /projects/{project}/decisions` · `/requirements` · `/risks` · `/actions` · `/questions` | Shortcuts over typed facts |
+| `GET /projects/{project}/timeline` | Dated events, milestones, decisions, due dates, document updates |
+| `GET /projects/{project}/documents?group=version` · `GET /documents/{file_id}/versions` | Version families |
+| `GET /documents/{file_id}/diff` | What changed between versions (section + line diff, optional summary) |
+| `GET /projects/{project}/changes` · `GET /changes` | Detected changes with impact cards |
+| `GET /projects/{project}/conflicts` · `/stale` | Contradictions and stale knowledge |
+| `GET /projects/{project}/entities` | People, clients, vendors, technologies in the project |
+| `GET /projects/{project}/similar` · `GET /projects/similar-to?query=` | Similar projects |
+| `GET /projects/{project}/reuse` · `GET /reuse` | Reusable assets (from the auditor export) |
+| `GET /projects/{project}/brief` · `/meeting-prep` · `/next-actions` · `GET /whats-happening` | Deliverables as sourced markdown (`narrative=true` adds a labelled LLM write-up) |
+| `POST /actions/propose` · `GET /actions/proposed` | Queue agent-suggested actions for approval |
+| `GET /digest/latest` | Latest monitoring digest |
+
+**Trust rules built into the layer**
+
+- Every state field and deliverable item cites a fact id and source file.
+  Fields the evidence does not support are `UNKNOWN`, never filled in.
+- Synthesized answers label claims **FACT / INFERENCE / UNKNOWN**; `/ask`
+  returns an `epistemic` block (counts, unknowns, uncited facts).
+- Conflicts are surfaced with both sides and a likely-latest suggestion; a person
+  settles them (`career_history.cli resolve-conflict ID --status confirmed|dismissed`).
+- Change impact cards say "rationale not found" when the documents do not
+  explain a change.
+- **Write exception:** era_mcp is read-only except for `proposed_actions`. It
+  only queues suggestions; nothing executes until approved with
+  `career_history.cli proposed-actions --approve ID`.
+
 ## Use cases — north-star capability map
 
 The long-term target is 35 use cases across six clusters. They all read from a
 **shared substrate**: *Engagements · People · Artifacts · Commitments · Decisions
-· Events*. **Today the system has only ~1.5 of those six** — **Artifacts**
-(indexed files/chunks, fully) and a thin **Engagements** layer (folder/project
-enumeration via the structural tool). **People, Commitments, Decisions, and
-Events do not exist as structured data yet** (the entity/graph tables exist but
-extraction is off), and there is **no proactive ("push") layer** at all. So what
+· Events*. **Artifacts** (indexed files/chunks) are complete. **People,
+Commitments, Decisions, and Events** are populated by the indexer's
+document-level extraction (`extract-documents`: ~13k entities, ~6k relationships,
+~2.8k decision/commitment/event facts on the last full run) and served by
+`/facts/*` and `/entities/*`. The project-intelligence layer (projects, state,
+changes, conflicts, briefs, digest) is described in
+[Project intelligence](#project-intelligence) below. The table that follows is
+the original north-star map; see that section for what now ships. So what
 ships today is a strong *retrieval + agentic Q&A engine over documents*; most of
 the list below is still aspirational. Status is honest, not optimistic:
 

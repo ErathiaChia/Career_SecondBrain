@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from era_mcp import config, llm, query_understanding, rerank, retrieval, structural
+from era_mcp import config, epistemic, llm, query_understanding, rerank, retrieval, structural
 
 _PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -46,9 +46,11 @@ _JUDGE_SYS = _load_prompt(
 )
 _SYNTH_SYS = _load_prompt(
     "synthesis.md",
-    "Answer ONLY from the numbered SOURCES, citing claims inline as [n]. If "
-    "incomplete or the search budget ran out, say plainly it is a best-effort "
-    "partial answer and name what is missing. Never fabricate.",
+    "Answer ONLY from the numbered SOURCES, citing claims inline as [n]. Label "
+    "claims FACT: (stated, cited), INFERENCE: (reasoned from cited facts) or "
+    "UNKNOWN: (not in the sources). If incomplete or the search budget ran out, "
+    "say plainly it is a best-effort partial answer and name what is missing. "
+    "Never fabricate.",
 )
 
 # Cheap structural router: census / enumeration questions go to the inventory,
@@ -412,6 +414,7 @@ async def run_agentic_ask(req: Any) -> dict:
         **base,
         "route": "semantic",
         "answer": answer,
+        "epistemic": epistemic.parse(answer) if answer else None,
         "citations": _citations(chunks),
         "chunks": chunks,
         "graph": graph,

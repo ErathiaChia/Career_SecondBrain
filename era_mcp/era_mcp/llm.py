@@ -46,7 +46,12 @@ async def _chat_ollama(base_url: str, model: str, messages: list[dict[str, str]]
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": temperature, "num_predict": max_tokens},
+        "options": {"temperature": temperature, "num_predict": max_tokens,
+                    "num_ctx": config.llm_num_ctx()},
+        # Thinking models (qwen3.5, gemma4) otherwise spend num_predict on hidden
+        # reasoning and can return empty content.
+        "think": config.llm_think(),
+        "keep_alive": config.llm_keep_alive(),
     }
     if json_mode:
         payload["format"] = "json"
