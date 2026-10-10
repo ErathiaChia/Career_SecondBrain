@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
@@ -171,26 +172,35 @@ def refresh_documents(
     track_changes = _change_tracking_enabled()
     processed = failed = entity_count = relationship_count = fact_count = 0
     for doc in docs:
-        try:
-            extracted = extract_document(doc, window_chars=window_chars, max_windows=max_windows)
-            old_facts = _file_facts(doc["file_id"]) if track_changes else []
-            db.clear_chunk_graph_data(doc["rep_chunk_id"])
-            ctx = {"file_id": doc["file_id"], "chunk_id": doc["rep_chunk_id"], "section_id": None}
-            ids_by_key = _persist_entities(ctx, extracted.get("entities", []))
-            entity_count += len(ids_by_key)
-            relationship_count += _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
-            fact_count += _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
-            if track_changes and old_facts:
-                _record_fact_diff(doc["file_id"], old_facts)
-            db.mark_graph_chunk_extracted(doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION)
-            processed += 1
-        except Exception as e:
-            failed += 1
-            db.mark_graph_chunk_extracted(
-                doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
-                status="failed", error_message=f"{type(e).__name__}: {e}",
-            )
-            console.log(f"[red]Doc extraction failed[/red] {doc['file_name']}: {e}")
+        for attempt in range(3):
+            try:
+                extracted = extract_document(doc, window_chars=window_chars, max_windows=max_windows)
+                old_facts = _file_facts(doc["file_id"]) if track_changes else []
+                db.clear_chunk_graph_data(doc["rep_chunk_id"])
+                ctx = {"file_id": doc["file_id"], "chunk_id": doc["rep_chunk_id"], "section_id": None}
+                ids_by_key = _persist_entities(ctx, extracted.get("entities", []))
+                entity_count += len(ids_by_key)
+                relationship_count += _persist_relationships(ctx, extracted.get("relationships", []), ids_by_key)
+                fact_count += _persist_facts(ctx, extracted.get("facts", []), ids_by_key)
+                if track_changes and old_facts:
+                    _record_fact_diff(doc["file_id"], old_facts)
+                db.mark_graph_chunk_extracted(doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION)
+                processed += 1
+                break
+            except Exception as e:
+                if _is_transient_db_error(e) and attempt < 2:
+                    console.log(
+                        f"[yellow]Transient database error, retrying[/yellow] {doc['file_name']}: {e}"
+                    )
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                failed += 1
+                db.mark_graph_chunk_extracted(
+                    doc["rep_chunk_id"], doc["content_hash"], DOC_EXTRACTOR_VERSION,
+                    status="failed", error_message=f"{type(e).__name__}: {e}",
+                )
+                console.log(f"[red]Doc extraction failed[/red] {doc['file_name']}: {e}")
+                break
     db.cleanup_orphan_graph_rows()
     snapshot = build_and_save_snapshot(folder=folder) if rebuild_snapshot else None
     return {
@@ -333,9 +343,10 @@ def extract_document(
     window_chars: int = MAX_DOC_CHARS,
     max_windows: int = MAX_DOC_WINDOWS,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Extract a whole file window-by-window and merge. A window that times out is
-    retried once as two halves before giving up, so one slow call no longer fails
-    the whole document."""
+    """Extract a whole file window-by-window and merge. A window that times out
+    or comes back as truncated JSON is retried once as two halves. A salvaged
+    prefix is kept only when those halves produce nothing, so one bad model
+    response no longer drops the whole document."""
     windows = split_windows(str(doc.get("content") or ""), window_chars, max_windows)
     base = {"file_name": doc.get("file_name"), "folder": doc.get("folder"),
             "section_path": None, "metadata": {"file_type": doc.get("file_type")}}
@@ -346,21 +357,84 @@ def extract_document(
                  "section_path": f"window {i}/{len(windows)}" if len(windows) > 1 else None}
         try:
             parts.append(extract_chunk(chunk, max_chars=window_chars))
-        except (TimeoutError, RuntimeError) as e:
-            if "timed out" not in str(e).lower() and not isinstance(e, TimeoutError):
-                errors.append(str(e))
-                continue
-            half = max(2000, len(window) // 2)
-            for sub in split_windows(window, half, 2):
-                try:
-                    parts.append(extract_chunk({**chunk, "content": sub}, max_chars=half))
-                except Exception as sub_e:  # noqa: BLE001
-                    errors.append(str(sub_e))
-        except ValueError as e:
-            errors.append(str(e))
+        except (TimeoutError, RuntimeError, ValueError) as e:
+            recovered, window_errors = _retry_window_as_halves(chunk, window, e)
+            if recovered:
+                parts.extend(recovered)
+            else:
+                errors.extend(window_errors or [str(e)])
     if not parts and errors:
         raise RuntimeError("; ".join(errors[:3]))
     return merge_extractions(parts)
+
+
+def _retry_window_as_halves(
+    chunk: dict[str, Any],
+    window: str,
+    exc: BaseException,
+) -> tuple[list[dict[str, list[dict[str, Any]]]], list[str]]:
+    """Re-extract a failed window as two halves. Returns recovered parts, or a
+    salvaged prefix of the original response when the halves produce nothing."""
+    partial = _useful_partial(getattr(exc, "partial", None))
+    halves: list[str] = []
+    if _should_split_window(exc):
+        half = max(2000, len(window) // 2)
+        candidate = split_windows(window, half, 2)
+        if len(candidate) >= 2 and any(len(piece) < len(window.strip()) for piece in candidate):
+            halves = candidate
+    if not halves:
+        if partial:
+            console.log(f"[yellow]Kept partial extraction[/yellow] {chunk.get('file_name')}: {exc}")
+            return [partial], []
+        return [], [str(exc)]
+    recovered: list[dict[str, list[dict[str, Any]]]] = []
+    sub_errors: list[str] = []
+    for sub in halves:
+        try:
+            recovered.append(extract_chunk({**chunk, "content": sub}, max_chars=len(sub)))
+        except Exception as sub_e:  # noqa: BLE001 — half failures fall back to a salvaged prefix
+            sub_partial = _useful_partial(getattr(sub_e, "partial", None))
+            if sub_partial:
+                recovered.append(sub_partial)
+            else:
+                sub_errors.append(str(sub_e))
+    if recovered:
+        return recovered, []
+    if partial:
+        console.log(f"[yellow]Kept partial extraction[/yellow] {chunk.get('file_name')}: {exc}")
+        return [partial], []
+    return [], sub_errors or [str(exc)]
+
+
+def _should_split_window(exc: BaseException) -> bool:
+    """Timeouts and broken model JSON are worth a smaller second pass.
+    A down Ollama or a database error is not."""
+    if isinstance(exc, (TimeoutError, TruncatedOutput, json.JSONDecodeError)):
+        return True
+    msg = str(exc).lower()
+    return "timed out" in msg or "unparseable json" in msg or "truncated" in msg
+
+
+def _useful_partial(partial: Any) -> dict[str, list[dict[str, Any]]] | None:
+    if not isinstance(partial, dict):
+        return None
+    norm = _normalize_extraction(partial)
+    if any(norm[key] for key in ("entities", "relationships", "facts")):
+        return norm
+    return None
+
+
+def _is_transient_db_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in (
+        "could not receive data",
+        "could not connect",
+        "connection refused",
+        "server closed the connection",
+        "can't assign requested address",
+        "connection already closed",
+        "ssl connection has been closed",
+    ))
 
 
 def build_snapshot_payload(
@@ -809,7 +883,16 @@ def _extract_with_ollama(
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         raise RuntimeError(f"Ollama request failed: {e}") from e
-    return _loads_json_object(body.get("response") or "{}")
+    response = body.get("response") or ""
+    try:
+        parsed, salvaged = loads_extraction_json(response)
+    except ValueError as e:
+        raise TruncatedOutput(str(e)) from e
+    # num_predict cuts the reply mid-object (done_reason "length"). A closed
+    # prefix is not the whole window, so the caller re-extracts it in halves.
+    if salvaged or body.get("done_reason") == "length":
+        raise TruncatedOutput("extraction JSON was truncated", partial=parsed)
+    return parsed
 
 
 def ollama_json_options() -> dict[str, Any]:
@@ -824,6 +907,9 @@ def ollama_json_options() -> dict[str, Any]:
         "options": {
             "temperature": 0,
             "num_ctx": int(models.get("graph_num_ctx", 16384)),
+            # 4096 tokens is about 12–16k characters. Dense decks hit this cap
+            # mid-JSON; loads_extraction_json salvages the prefix and the
+            # window is retried as two halves instead of failing the file.
             "num_predict": int(models.get("graph_num_predict", 4096)),
         },
     }
@@ -909,6 +995,151 @@ def repair_json(raw: str) -> str:
     escapes (Windows paths, LaTeX) and trailing commas before ``}``/``]``."""
     fixed = _BAD_ESCAPE_RE.sub(r"\\\\", raw)
     return _TRAILING_COMMA_RE.sub(r"\1", fixed)
+
+
+class TruncatedOutput(ValueError):
+    """Model JSON was cut off or only a prefix of it parsed.
+
+    ``partial`` is the object salvaged from the complete values before the cut.
+    Conflict judging and other callers of ``_loads_json_object`` never see this;
+    accepting a half-written verdict there would be worse than failing the call.
+    """
+
+    def __init__(self, message: str, partial: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.partial = partial
+
+
+_NUMBER_RE = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+
+def _json_closers(stack: list[str]) -> str:
+    return "".join("}" if bracket == "{" else "]" for bracket in reversed(stack))
+
+
+def salvage_json_object(raw: str) -> str:
+    """Close a JSON object that was cut off mid-value.
+
+    Keeps the longest prefix of complete values and drops the unfinished
+    element. Closing the cut string in place would invent a truncated name
+    or quote, so that element is discarded instead.
+    """
+    start = raw.find("{")
+    if start < 0:
+        raise ValueError("no JSON object to salvage")
+    text = raw[start:]
+    limit = len(text)
+    stack: list[str] = []
+    checkpoints: list[tuple[int, str]] = []
+    i = 0
+    cut_short = False
+
+    def skip_ws(pos: int) -> int:
+        while pos < limit and text[pos] in " \t\r\n":
+            pos += 1
+        return pos
+
+    while i < limit:
+        char = text[i]
+        if char in " \t\r\n":
+            i += 1
+            continue
+        if char == '"':
+            j = i + 1
+            escaped = False
+            while j < limit:
+                if escaped:
+                    escaped = False
+                elif text[j] == "\\":
+                    escaped = True
+                elif text[j] == '"':
+                    break
+                j += 1
+            if j >= limit:
+                cut_short = True
+                break
+            nxt = skip_ws(j + 1)
+            if nxt < limit and text[nxt] == ":":
+                i = nxt
+                continue
+            checkpoints.append((j + 1, _json_closers(stack)))
+            i = j + 1
+            continue
+        if char == "{":
+            stack.append("{")
+            i += 1
+            continue
+        if char == "[":
+            stack.append("[")
+            i += 1
+            continue
+        if char == "}":
+            if not stack or stack[-1] != "{":
+                cut_short = True
+                break
+            stack.pop()
+            checkpoints.append((i + 1, _json_closers(stack)))
+            i += 1
+            continue
+        if char == "]":
+            if not stack or stack[-1] != "[":
+                cut_short = True
+                break
+            stack.pop()
+            checkpoints.append((i + 1, _json_closers(stack)))
+            i += 1
+            continue
+        if char in ":,":
+            i += 1
+            continue
+        if char == "-" or char.isdigit() or text.startswith(("true", "false", "null"), i):
+            if text.startswith("true", i):
+                j = i + 4
+            elif text.startswith("false", i):
+                j = i + 5
+            elif text.startswith("null", i):
+                j = i + 4
+            else:
+                match = _NUMBER_RE.match(text, i)
+                if not match:
+                    cut_short = True
+                    break
+                j = match.end()
+            checkpoints.append((j, _json_closers(stack)))
+            i = j
+            continue
+        cut_short = True
+        break
+
+    if not checkpoints:
+        raise ValueError("unparseable JSON")
+    # A cut inside a later element must not keep that half-written object.
+    # Roll back to the last complete array/object value when there is one.
+    chosen = checkpoints[-1]
+    if cut_short:
+        for end, closers in reversed(checkpoints):
+            if text[end - 1] in "}]":
+                chosen = (end, closers)
+                break
+    end, closers = chosen
+    body = text[:end].rstrip().rstrip(",").rstrip()
+    return body + closers
+
+
+def loads_extraction_json(raw: str) -> tuple[dict[str, Any], bool]:
+    """Parse extraction JSON. The second value is True when only a salvaged
+    prefix parsed, which means the reply was cut off."""
+    try:
+        return _loads_json_object(raw), False
+    except (json.JSONDecodeError, ValueError):
+        pass
+    try:
+        value = json.loads(salvage_json_object(repair_json(raw)), strict=False)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise ValueError("unparseable JSON") from e
+    if not isinstance(value, dict):
+        raise ValueError("Ollama response was not a JSON object")
+    return value, True
 
 
 def _loads_json_object(raw: str) -> dict[str, Any]:
